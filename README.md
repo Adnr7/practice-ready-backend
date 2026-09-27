@@ -101,14 +101,79 @@ The interface includes:
 ## Technology
 
 - TypeScript
-- React
-- Vinext
-- Vite
+- React 19
+- Vinext (Next.js App Router on Cloudflare Workers)
+- Cloudflare D1 (SQLite) with Drizzle ORM
+- Edge WebCrypto API (PBKDF2 password hashing & HMAC-SHA256 sessions)
 - Tailwind CSS
 - Web Audio API
-- Cloudflare tooling
+- Cloudflare Wrangler tooling
 
-## Local Setup
+## Production Backend Architecture
+
+Practice Ready includes an enterprise-ready, serverless edge backend tailored for university music conservatory deployments:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Cloudflare Workers Runtime                      │
+│                                                                        │
+│  ┌────────────────────────┐         ┌───────────────────────────────┐  │
+│  │   Next.js / Vinext     │         │       REST API Endpoints      │  │
+│  │   Client UI Components │ ◄─────► │     (app/api/.../route.ts)    │  │
+│  │    (Preserved 100%)    │  fetch  │   - Auth & Session Cookies    │  │
+│  └────────────────────────┘         │   - Availability & Slots      │  │
+│                                     │   - Atomic Booking Engine     │  │
+│                                     │   - Equipment Readiness       │  │
+│                                     └──────────────┬────────────────┘  │
+│                                                    │                   │
+│                                     ┌──────────────▼────────────────┐  │
+│                                     │          Drizzle ORM          │  │
+│                                     │   (drizzle-orm/d1 + Schema)   │  │
+│                                     └──────────────┬────────────────┘  │
+└────────────────────────────────────────────────────┼───────────────────┘
+                                                     │
+                                      ┌──────────────▼────────────────┐
+                                      │    Cloudflare D1 (SQLite)     │
+                                      │   - Users & RBAC Sessions     │
+                                      │   - Rooms & Campus Locations  │
+                                      │   - Equipment & Conditions    │
+                                      │   - Slots & Atomic Bookings   │
+                                      └───────────────────────────────┘
+```
+
+### Database Schema (`db/schema.ts`)
+- **`users`**: University student & staff accounts (`student`, `technician`, `admin`) with PBKDF2 hash + salt and student ID records.
+- **`rooms`**: Music Practice Rooms (MPR 2, 3, 4, 5, Performance Hall) with capacity, description, and status.
+- **`locations`**: Campus locations (rooms, blocks, labs, storage).
+- **`equipment`**: 40+ authentic music gear items tracking default room, current physical location, condition, and status (`ready`, `away`, `attention`, `service`, `missing`).
+- **`time_slots`**: Pre-generated 30-minute intervals indexed by `(room_id, date, status)`.
+- **`bookings`**: Reservations with institutional booking reference (`PR-YYYY-XXXX`), student ownership, and duration constraints.
+- **`booking_slots`**: Relational junction table linking bookings to reserved time slots.
+
+### REST API Reference
+
+| Method | Endpoint | Description | Role / Access |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | Student/Staff account registration | Public |
+| `POST` | `/api/auth/login` | Login and set `pr_session` HTTP-only cookie | Public |
+| `POST` | `/api/auth/logout` | Clear session cookie | Authenticated |
+| `GET` | `/api/auth/me` | Current user profile & role verification | Authenticated |
+| `GET` | `/api/rooms` | Active practice rooms with capacity | Public |
+| `GET` | `/api/availability` | Room slots grouped by period (`?roomId=X&date=YYYY-MM-DD`) | Public |
+| `POST` | `/api/bookings` | Atomic slot booking with double-booking prevention | Student / Guest |
+| `GET` | `/api/bookings` | Retrieve user bookings (`?filter=upcoming\|past`) | Student / Admin |
+| `DELETE` | `/api/bookings/:id` | Cancel reservation and release time slots | Owner / Admin |
+| `GET` | `/api/equipment` | Search equipment (`?query=&type=&locationId=&status=`) | Public |
+| `GET` | `/api/equipment/room/:roomId` | Room equipment readiness breakdown (ready, away, attention) | Public |
+| `PATCH` | `/api/equipment/:id` | Update equipment condition or physical location | Technician / Admin |
+| `POST` | `/api/seed` | Initialize True School of Music rooms, gear, and slots | Admin / Dev |
+
+### Booking Policy Enforcement
+1. **Continuous 30-Minute Slots**: Disallows gap bookings or arbitrary time offsets.
+2. **Maximum 3-Hour Duration**: Limits single student reservations to 180 minutes (6 consecutive 30-min slots).
+3. **Atomic Concurrency Check**: If another user reserves an overlapping slot concurrently, returns `409 Conflict` with `conflictingSlots` list.
+
+## Local Setup & Development
 
 Install dependencies:
 
@@ -116,30 +181,47 @@ Install dependencies:
 pnpm install
 ```
 
+Generate database migrations:
+
+```bash
+pnpm db:generate
+```
+
+Run unit & concurrency tests:
+
+```bash
+npm test
+```
+
 Build the project:
 
 ```bash
-pnpm build
+npm run build
 ```
 
-Start the production build locally:
+Start the production server:
 
 ```bash
 npx vinext start
 ```
 
-If the server reports `http://0.0.0.0:3000`, open:
+## Cloudflare D1 Deployment Guide
 
-```text
-http://localhost:3000
-```
+1. Create the D1 database on Cloudflare:
+   ```bash
+   npx wrangler d1 create practice_ready_db
+   ```
+2. Update the `database_id` in `wrangler.json`.
+3. Apply migrations to Cloudflare D1:
+   ```bash
+   npx wrangler d1 migrations apply practice_ready_db --remote
+   ```
+4. Deploy the Workers application:
+   ```bash
+   npx wrangler deploy
+   ```
+5. Trigger initial seeding:
+   ```bash
+   curl -X POST https://<your-worker>.workers.dev/api/seed
+   ```
 
-For this project, the production-preview workflow above is the recommended way to preview the actual app locally.
-
-## Project Status
-
-Practice Ready is a functional interactive prototype developed for HCI/UI-UX evaluation and formal usability testing.
-
-The current version includes the complete booking happy path with explicit time-period selection, consecutive 30-minute slot booking, contextual MPR editing with state preservation, equipment-readiness and alternative-search flows, semantic equipment search and location browsing, responsive desktop/mobile layouts, light and dark themes, background music with independent interface feedback sounds, and a deterministic Booking Conflict Demo.
-
-Equipment, room availability, scheduling information, equipment IDs, quantities, locations and condition states used in the prototype are illustrative prototype data and should not be treated as an authoritative live inventory or booking system for the True School of Music.
