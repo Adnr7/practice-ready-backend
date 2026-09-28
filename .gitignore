@@ -35,5 +35,6 @@ Thumbs.db
 .sites-runtime/
 .agents/
 
-# Next.js generated type file
+# Next.js / Vinext generated type file and build cache
 next-env.d.ts
+.vinext/
