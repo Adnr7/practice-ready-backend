@@ -128,7 +128,9 @@ export async function POST(request: Request) {
     // If slots not yet generated for date, create them
     if (existingSlots.length === 0) {
       const dailySlots = generateDailyTimeSlots(roomId, date);
-      await db.insert(timeSlots).values(dailySlots);
+      for (let i = 0; i < dailySlots.length; i += 10) {
+        await db.insert(timeSlots).values(dailySlots.slice(i, i + 10));
+      }
 
       existingSlots = await db
         .select()

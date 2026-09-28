@@ -22,9 +22,10 @@ export async function POST(request: Request) {
 
     const db = getDb();
 
-    // Check if database already has rooms
+    // Check if database already has rooms and slots
     const existingRooms = await db.select().from(rooms).limit(1);
-    if (existingRooms.length > 0 && !force) {
+    const existingSlots = await db.select().from(timeSlots).limit(1);
+    if (existingRooms.length > 0 && existingSlots.length > 0 && !force) {
       return Response.json({
         message: "Database already seeded. Pass ?force=true to re-seed or update.",
       });
@@ -166,7 +167,10 @@ export async function POST(request: Request) {
 
         if (!existing) {
           const slots = generateDailyTimeSlots(r.id, dateStr);
-          await db.insert(timeSlots).values(slots);
+          // Insert in chunks of 10 (60 parameters) to stay well within D1's 100-parameter limit
+          for (let i = 0; i < slots.length; i += 10) {
+            await db.insert(timeSlots).values(slots.slice(i, i + 10));
+          }
           seededSlotCount += slots.length;
         }
       }
