@@ -170,10 +170,13 @@ export async function POST(request: Request) {
           eq(timeSlots.roomId, roomId), eq(timeSlots.date, date),
           inArray(timeSlots.startTime, validation.requiredSlots),
         ));
+        const conflictingSlots = validation.requiredSlots.filter((startTime) =>
+          !slots.some((slot) => slot.startTime === startTime && slot.status === "available"),
+        );
         return Response.json(
           {
             error: "Booking conflict detected: One or more selected time slots have already been reserved.",
-            conflictingSlots: slots.filter((slot) => slot.status !== "available").map((slot) => slot.startTime),
+            conflictingSlots,
           },
           { status: 409 },
         );

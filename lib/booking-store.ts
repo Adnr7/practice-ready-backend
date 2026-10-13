@@ -34,9 +34,16 @@ export async function reserveSlots(
         (booking_ref, user_id, guest_student_name, guest_student_id,
          room_id, date, start_time, end_time, duration_minutes, status)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed'
-      WHERE (SELECT COUNT(*) FROM time_slots
-        WHERE room_id = ? AND date = ? AND start_time IN (${placeholders})
-          AND status = 'available') = ?
+       WHERE (SELECT COUNT(DISTINCT slot.start_time) FROM time_slots slot
+         WHERE slot.room_id = ? AND slot.date = ? AND slot.start_time IN (${placeholders})
+           AND slot.status = 'available'
+           AND NOT EXISTS (
+             SELECT 1 FROM time_slots occupied
+             WHERE occupied.room_id = slot.room_id
+               AND occupied.date = slot.date
+               AND occupied.start_time = slot.start_time
+               AND occupied.status <> 'available'
+           )) = ?
       RETURNING id, booking_ref AS bookingRef, user_id AS userId,
         guest_student_name AS guestStudentName, guest_student_id AS guestStudentId,
         room_id AS roomId, date, start_time AS startTime, end_time AS endTime,
@@ -48,10 +55,33 @@ export async function reserveSlots(
       booking.roomId, booking.date, ...requiredSlots, requiredSlots.length,
     ),
     db.prepare(`
-      INSERT INTO booking_slots (booking_id, time_slot_id)
-      SELECT b.id, s.id FROM bookings b JOIN time_slots s
-        ON s.room_id = b.room_id AND s.date = b.date
-      WHERE b.booking_ref = ? AND s.start_time IN (${placeholders}) AND changes() = 1
+     INSERT INTO booking_slots (booking_id, time_slot_id)
+     SELECT b.id, s.id FROM bookings b JOIN time_slots s
+       ON s.room_id = b.room_id AND s.date = b.date
+      WHERE b.booking_ref = ? AND s.start_time IN (${placeholders})
+        AND s.status = 'available'
+        AND NOT EXISTS (
+          SELECT 1 FROM time_slots occupied
+          WHERE occupied.room_id = s.room_id
+            AND occupied.date = s.date
+            AND occupied.start_time = s.start_time
+            AND occupied.status <> 'available'
+        )
+        AND s.id = (
+          SELECT MIN(candidate.id) FROM time_slots candidate
+          WHERE candidate.room_id = b.room_id
+            AND candidate.date = b.date
+            AND candidate.start_time = s.start_time
+            AND candidate.status = 'available'
+            AND NOT EXISTS (
+              SELECT 1 FROM time_slots occupied
+              WHERE occupied.room_id = candidate.room_id
+                AND occupied.date = candidate.date
+                AND occupied.start_time = candidate.start_time
+                AND occupied.status <> 'available'
+            )
+        )
+        AND changes() = 1
     `).bind(booking.bookingRef, ...requiredSlots),
     db.prepare(`
       UPDATE time_slots SET status = 'booked'

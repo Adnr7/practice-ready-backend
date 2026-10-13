@@ -86,6 +86,27 @@ export async function GET(request: Request) {
       }
     }
 
+    // Older databases may contain both the original 06:00-24:00 grid and a
+    // regenerated full-day grid. Treat duplicate start times as one logical
+    // slot until the database migration can enforce its unique index.
+    const statusPriority: Record<SlotRow["status"], number> = {
+      booked: 0,
+      maintenance: 1,
+      available: 2,
+    };
+    const uniqueSlots = new Map<string, SlotRow>();
+    for (const slot of slots) {
+      const current = uniqueSlots.get(slot.startTime);
+      if (
+        !current ||
+        statusPriority[slot.status] < statusPriority[current.status] ||
+        (slot.status === current.status && slot.id < current.id)
+      ) {
+        uniqueSlots.set(slot.startTime, slot);
+      }
+    }
+    slots = [...uniqueSlots.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
+
     // Resolve the display name of the confirmed booking holding each booked slot
     // so clients can show who is in the room.
     const bookedSlotIds = slots

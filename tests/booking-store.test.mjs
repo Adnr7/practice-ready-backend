@@ -57,6 +57,20 @@ describe("D1 atomic booking storage", () => {
     assert.equal(await db.prepare("SELECT status FROM time_slots WHERE start_time = '10:00'").first("status"), "available");
   });
 
+  it("treats legacy duplicate rows for one start time as a single slot", async () => {
+    await db.prepare("DROP INDEX IF EXISTS idx_time_slots_unique").run();
+    await db.prepare(`INSERT INTO time_slots (room_id, date, period, start_time, end_time) VALUES
+      (1, '2099-01-01', 'morning', '09:00', '09:30'),
+      (1, '2099-01-01', 'morning', '09:30', '10:00')`).run();
+
+    const first = await reserveSlots(db, booking("PR-2099-1001"), ["09:00", "09:30"]);
+    assert.ok(first);
+    assert.equal(await db.prepare("SELECT count(*) FROM booking_slots").first("count(*)"), 2);
+
+    const second = await reserveSlots(db, booking("PR-2099-1002"), ["09:00", "09:30"]);
+    assert.equal(second, null);
+  });
+
   it("rolls back all writes when linking a booking fails", async () => {
     await db.prepare("CREATE TRIGGER fail_booking_link BEFORE INSERT ON booking_slots BEGIN SELECT RAISE(ABORT, 'test failure'); END").run();
     await assert.rejects(reserveSlots(db, booking("PR-2099-1001"), ["09:00", "09:30"]));
