@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -17,6 +17,8 @@ import {
   Sun,
   ShieldCheck,
   TriangleAlert,
+  User,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -24,8 +26,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { submitBooking } from "@/lib/api-client";
-import { minutesToTime, timeToMinutes } from "@/lib/booking-engine";
+import {
+  fetchAvailability,
+  fetchBookingStatus,
+  fetchSchedule,
+  resolveRoomId,
+  submitBooking,
+  type ScheduleResponse,
+} from "@/lib/api-client";
+import { isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
 
 
@@ -306,8 +315,10 @@ type Screen =
   | "recheck"
   | "success"
   | "conflict"
+  | "booking-error"
   | "directory-search"
   | "directory-browse"
+  | "schedule"
   | "directory-results";
 
 type Equipment = {
@@ -777,25 +788,6 @@ const mixerResults: Equipment[] = [
     currentLocation: "Store Room",
     condition: "Out of service",
     status: "service",
-  },
-];
-
-const standResults: Equipment[] = [
-  {
-    id: "MS-02",
-    name: "K&M 210/9 boom microphone stand",
-    defaultLocation: "MPR 2",
-    currentLocation: "MPR 2",
-    condition: "Fully functional",
-    status: "ready",
-  },
-  {
-    id: "MS-03",
-    name: "K&M 210/9 boom microphone stand",
-    defaultLocation: "Studio",
-    currentLocation: "Studio",
-    condition: "Fully functional",
-    status: "ready",
   },
 ];
 
@@ -1523,9 +1515,6 @@ const alternativeEquipmentMatches = (item: Equipment, value: string) => {
   return appWideEquipmentSearchRank(item, value) < 99;
 };
 
-const equipmentMatches = (item: Equipment, value: string) =>
-  appWideEquipmentSearchRank(item, value) < 99;
-
 const equipmentQueryWords = (value: string) => {
   const normalized = normalizeEquipmentSearch(value);
   if (!normalized) return [];
@@ -1786,29 +1775,19 @@ const liveListEquipmentSearchRank = (item: Equipment, value: string) => {
   return 99;
 };
 
-const clockLabel = (absoluteMinutes: number) => {
-  const minutesInDay = ((absoluteMinutes % 1440) + 1440) % 1440;
-  const hour24 = Math.floor(minutesInDay / 60);
-  const minute = minutesInDay % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
-};
+// The institution runs on a 24-hour clock. Each slot is identified by its
+// start time in "HH:MM" form, which doubles as the value sent to the API.
+const slotKey = (absoluteMinutes: number) => minutesToTime(absoluteMinutes);
 
-const halfHourSlot = (startMinutes: number) => {
-  const start = clockLabel(startMinutes);
-  const end = clockLabel(startMinutes + 30);
-  const startSuffix = start.endsWith("AM") ? "AM" : "PM";
-  const endSuffix = end.endsWith("AM") ? "AM" : "PM";
-  const compactStart =
-    startSuffix === endSuffix ? start.replace(/ (AM|PM)$/, "") : start;
-  return `${compactStart}–${end}`;
-};
+const slotLabel = (startTime: string) =>
+  /^\d{2}:\d{2}$/.test(startTime)
+    ? `${startTime}–${minutesToTime(timeToMinutes(startTime) + 30)}`
+    : startTime;
 
 const slotsBetween = (startMinutes: number, endMinutes: number) =>
   Array.from(
     { length: (endMinutes - startMinutes) / 30 },
-    (_, index) => halfHourSlot(startMinutes + index * 30),
+    (_, index) => slotKey(startMinutes + index * 30),
   );
 
 const periods = [
@@ -1823,17 +1802,8 @@ const periods = [
 const allTimeSlots = periods.flatMap((period) => period.times);
 const timeRangeLabel = (slots: string[]) => {
   if (slots.length === 0) return "";
-  if (slots.length === 1) return slots[0];
-  const [rawStart, firstEnd] = slots[0].split("–");
-  const lastEnd = slots.at(-1)!.split("–")[1];
-  const firstSuffix = firstEnd.match(/(AM|PM)$/)?.[1] ?? "";
-  const lastSuffix = lastEnd.match(/(AM|PM)$/)?.[1] ?? "";
-  const start = /(AM|PM)$/.test(rawStart)
-    ? rawStart
-    : firstSuffix === lastSuffix
-      ? rawStart
-      : `${rawStart} ${firstSuffix}`;
-  return `${start}–${lastEnd}`;
+  if (slots.length === 1) return slotLabel(slots[0]);
+  return `${slots[0]}–${minutesToTime(timeToMinutes(slots[slots.length - 1]) + 30)}`;
 };
 
 const durationLabel = (slotCount: number) => {
@@ -1850,15 +1820,111 @@ const bookingDateForSlots = (baseDate: Date, slots: string[]) => {
   const bookingDate = new Date(baseDate);
   if (slots.length === 0) return bookingDate;
   const firstIndex = allTimeSlots.indexOf(slots[0]);
-  // The operational day runs 6:00 AM–6:00 AM. Slots from midnight onward
+  // The operational day runs 06:00–06:00. Slots from midnight onward
   // belong to the following calendar date even though they remain on this screen.
   const midnightIndex = periods.slice(0, 5).flatMap((period) => period.times).length;
   if (firstIndex >= midnightIndex) bookingDate.setDate(bookingDate.getDate() + 1);
   return bookingDate;
 };
 
+// YYYY-MM-DD in the viewer's local calendar, matching how the date picker
+// constructs dates. Unlike toISOString(), this never shifts the day for
+// timezones ahead of UTC (e.g. IST, the institution's timezone).
+const dateKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+const ACTIVE_RESERVATION_STORAGE_KEY = "practice-ready-active-reservation";
+
+const subscribeHydration = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
+const subscribeStorage = (onChange: () => void) => {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+};
+const readStoredReservation = () => {
+  try {
+    return window.localStorage.getItem(ACTIVE_RESERVATION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+};
+const getServerReservation = () => null;
+const subscribeGreeting = (onChange: () => void) => {
+  const timer = window.setInterval(onChange, 60_000);
+  return () => window.clearInterval(timer);
+};
+const getGreeting = () => {
+  const hour = new Date().getHours();
+  return hour >= 6 && hour < 12 ? "Good morning"
+    : hour >= 12 && hour < 17 ? "Good afternoon"
+    : hour >= 17 && hour < 20 ? "Good evening" : "Ready for a late session?";
+};
+const getServerGreeting = () => "Welcome";
+
+interface ActiveReservation {
+  bookingRef: string;
+  roomId: number;
+  roomName?: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  status: string;
+  bookedFor?: string;
+}
+
+const isActiveReservation = (value: unknown): value is ActiveReservation => {
+  if (!value || typeof value !== "object") return false;
+
+  const reservation = value as Partial<ActiveReservation>;
+  return (
+    typeof reservation.bookingRef === "string" &&
+    /^PR-\d{4}-\d{4}$/.test(reservation.bookingRef) &&
+    typeof reservation.roomId === "number" &&
+    Number.isSafeInteger(reservation.roomId) &&
+    reservation.roomId > 0 &&
+    (reservation.roomName === undefined || typeof reservation.roomName === "string") &&
+    typeof reservation.date === "string" &&
+    isValidCalendarDate(reservation.date) &&
+    typeof reservation.startTime === "string" &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(reservation.startTime) &&
+    typeof reservation.endTime === "string" &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(reservation.endTime) &&
+    typeof reservation.status === "string" &&
+    (reservation.bookedFor === undefined || typeof reservation.bookedFor === "string")
+  );
+};
+
+// Room booking times are always IST, including for users browsing abroad.
+const localDateTimeMs = (date: string, time: string, dayOffset = 0) => {
+  return Date.parse(`${date}T${time}:00+05:30`) + dayOffset * 86_400_000;
+};
+
+const humanizeDuration = (ms: number) => {
+  const mins = Math.max(0, Math.round(ms / 60_000));
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${hours}h ${rem}m` : `${hours}h`;
+};
+
+const reservationCountdownLabel = (
+  reservation: Pick<ActiveReservation, "date" | "startTime" | "endTime">,
+  nowMs: number,
+) => {
+  const startMs = localDateTimeMs(reservation.date, reservation.startTime);
+  const endMs = localDateTimeMs(
+    reservation.date,
+    reservation.endTime,
+    reservation.endTime === "00:00" ? 1 : 0,
+  );
+  if (nowMs < startMs) return `Starts in ${humanizeDuration(startMs - nowMs)}`;
+  if (nowMs < endMs) return `In progress, ${humanizeDuration(endMs - nowMs)} left`;
+  return "Completed";
+};
+
 const bookedFromHourStarts = (starts: number[]) =>
-  new Set(starts.flatMap((start) => [halfHourSlot(start), halfHourSlot(start + 30)]));
+  new Set(starts.flatMap((start) => [slotKey(start), slotKey(start + 30)]));
 
 const booked3 = bookedFromHourStarts([420, 600, 780, 1080, 1260, 1560]);
 const booked5 = bookedFromHourStarts([420, 540, 720, 900, 1140, 1380]);
@@ -1902,20 +1968,23 @@ const monthName = (date: Date) =>
   );
 
 function ThemeToggle({ fixed = true, inline = false }: { fixed?: boolean; inline?: boolean }) {
-  const [isDarkTheme, setIsDarkTheme] = useState<boolean | null>(null);
+  const mounted = useSyncExternalStore(subscribeHydration, getClientSnapshot, getServerSnapshot);
+  const [themeOverride, setIsDarkTheme] = useState<boolean | null>(null);
   const [isThemeSpinning, setIsThemeSpinning] = useState(false);
-
-  useEffect(() => {
-    const savedTheme = window.localStorage.getItem("practice-ready-theme");
+  const readTheme = () => {
+    let savedTheme: string | null = null;
+    try { savedTheme = window.localStorage.getItem("practice-ready-theme"); } catch { /* Storage is optional. */ }
     const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const nextIsDark = savedTheme
+    return savedTheme
       ? savedTheme === "dark"
       : document.documentElement.classList.contains("dark") || systemPrefersDark;
-
-    document.documentElement.classList.toggle("dark", nextIsDark);
-    document.documentElement.style.colorScheme = nextIsDark ? "dark" : "light";
-    setIsDarkTheme(nextIsDark);
-  }, []);
+  };
+  const isDarkTheme = themeOverride ?? (mounted ? readTheme() : null);
+  useEffect(() => {
+    if (isDarkTheme === null) return;
+    document.documentElement.classList.toggle("dark", isDarkTheme);
+    document.documentElement.style.colorScheme = isDarkTheme ? "dark" : "light";
+  }, [isDarkTheme]);
 
   const toggleTheme = () => {
     if (isThemeSpinning || isDarkTheme === null) return;
@@ -1934,10 +2003,9 @@ function ThemeToggle({ fixed = true, inline = false }: { fixed?: boolean; inline
 
         window.requestAnimationFrame(() => {
           document.documentElement.style.colorScheme = nextIsDark ? "dark" : "light";
-          window.localStorage.setItem(
-            "practice-ready-theme",
-            nextIsDark ? "dark" : "light",
-          );
+          try {
+            window.localStorage.setItem("practice-ready-theme", nextIsDark ? "dark" : "light");
+          } catch { /* The palette still works when storage is blocked. */ }
         });
       });
     }, 520);
@@ -2308,10 +2376,12 @@ function Summary({
   room,
   time,
   date,
+  bookedFor,
 }: {
   room: string;
   time: string;
   date: Date;
+  bookedFor?: string;
 }) {
   const details = [
     { label: "Date", value: shortDate(date) },
@@ -2320,20 +2390,28 @@ function Summary({
   ];
 
   return (
-    <div className="grid min-w-0 grid-cols-3 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-[#30384D] dark:bg-[#151A2B] dark:text-[#F5F7FF]">
-      {details.map((detail, index) => (
-        <div
-          key={detail.label}
-          className={`min-w-0 px-3 py-3.5 sm:px-5 sm:py-4 ${index > 0 ? "border-l border-slate-200 dark:border-[#30384D]" : ""}`}
-        >
-          <small className="block text-xs text-slate-500 dark:text-[#8F9BB2]">
-            {detail.label}
-          </small>
-          <p className="mt-1 break-words text-[13px] font-semibold leading-5 sm:text-sm">
-            {detail.value}
-          </p>
+    <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-[#30384D] dark:bg-[#151A2B] dark:text-[#F5F7FF]">
+      <div className="grid min-w-0 grid-cols-3">
+        {details.map((detail, index) => (
+          <div
+            key={detail.label}
+            className={`min-w-0 px-3 py-3.5 sm:px-5 sm:py-4 ${index > 0 ? "border-l border-slate-200 dark:border-[#30384D]" : ""}`}
+          >
+            <small className="block text-xs text-slate-500 dark:text-[#8F9BB2]">
+              {detail.label}
+            </small>
+            <p className="mt-1 break-words text-[13px] font-semibold leading-5 sm:text-sm">
+              {detail.value}
+            </p>
+          </div>
+        ))}
+      </div>
+      {bookedFor ? (
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 dark:border-[#30384D] px-3 py-2.5 sm:px-5 sm:py-3">
+          <small className="text-xs text-slate-500 dark:text-[#8F9BB2]">Booked for</small>
+          <p className="min-w-0 truncate text-[13px] font-semibold sm:text-sm">{bookedFor}</p>
         </div>
-      ))}
+      ) : null}
     </div>
   );
 }
@@ -2341,10 +2419,12 @@ function ConfirmationDetails({
   room,
   time,
   date,
+  bookedFor,
 }: {
   room: string;
   time: string;
   date: Date;
+  bookedFor?: string;
 }) {
   const details = [
     { label: "Date", value: shortDate(date), icon: <CalendarDays size={18} /> },
@@ -2374,6 +2454,17 @@ function ConfirmationDetails({
           </div>
         ))}
       </div>
+      {bookedFor ? (
+        <div className="mt-2.5 flex items-center gap-2.5 rounded-2xl border border-slate-200 dark:border-[#30384D] bg-white dark:bg-[#1B2133] px-3.5 py-3 shadow-sm sm:gap-3 sm:p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-violet-50 dark:bg-[#211A38] text-violet-700 dark:text-violet-300 sm:h-10 sm:w-10">
+            <User size={18} />
+          </span>
+          <span className="min-w-0">
+            <small className="block text-xs text-slate-500 dark:text-[#8F9BB2]">Booked for</small>
+            <p className="mt-0.5 truncate text-[13px] font-semibold leading-5 sm:text-sm">{bookedFor}</p>
+          </span>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2388,7 +2479,6 @@ function EquipmentRow({
   availableEquipmentLayout = false,
   transparentDarkSurface = false,
   availableStatusOnIdRow = false,
-  compactAvailableMobile = false,
 }: {
   item: Equipment;
   showDefault?: boolean;
@@ -2398,7 +2488,6 @@ function EquipmentRow({
   availableEquipmentLayout?: boolean;
   transparentDarkSurface?: boolean;
   availableStatusOnIdRow?: boolean;
-  compactAvailableMobile?: boolean;
 }) {
   const [imageOpen, setImageOpen] = useState(false);
   const imageUrl = equipmentImageUrl(item);
@@ -2591,6 +2680,20 @@ export default function Home() {
   const [screen, setScreen] = useState<Screen>("home");
   const [history, setHistory] = useState<Screen[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [studentName, setStudentName] = useState("");
+  const [liveSlotResult, setLiveSlotResult] = useState<{
+    key: string;
+    slots: Record<string, { booked: boolean; bookedBy?: string | null }> | null;
+  } | null>(null);
+  const [reservationOverride, setActiveReservation] = useState<ActiveReservation | null>();
+  const storedReservationJson = useSyncExternalStore(subscribeStorage, readStoredReservation, getServerReservation);
+  const storedReservation = useMemo(() => {
+    try {
+      const value = JSON.parse(storedReservationJson ?? "null");
+      return isActiveReservation(value) ? value : null;
+    } catch { return null; }
+  }, [storedReservationJson]);
+  const activeReservation = reservationOverride === undefined ? storedReservation : reservationOverride;
   const [calendarMonth, setCalendarMonth] = useState(() =>
     startOfMonth(new Date()),
   );
@@ -2610,24 +2713,20 @@ export default function Home() {
   const [locationQuery, setLocationQuery] = useState("");
   const [availableEquipmentQuery, setAvailableEquipmentQuery] = useState("");
   const [directoryTab, setDirectoryTab] = useState("available");
-  const [isAlternativeRoom, setIsAlternativeRoom] = useState(false);
-  const [alternativeOriginalTime, setAlternativeOriginalTime] = useState("");
-  const [alternativeOriginalSlots, setAlternativeOriginalSlots] = useState<
-    string[]
-  >([]);
   const statusTabClass =
     "rounded-xl font-medium text-slate-500 dark:text-[#9AA6BC] data-[state=active]:bg-white dark:data-[state=active]:bg-[#252C3E] data-[state=active]:text-violet-700 dark:data-[state=active]:text-violet-200 data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-violet-300 dark:data-[state=active]:ring-violet-500/70";
-  const [demoConflict, setDemoConflict] = useState(false);
+  const mounted = useSyncExternalStore(subscribeHydration, getClientSnapshot, getServerSnapshot);
+  const [demoOverride, setDemoConflict] = useState<boolean | null>(null);
+  const demoConflict = demoOverride ?? (mounted && new URLSearchParams(window.location.search).get("demo") === "conflict");
   const [conflictConsumed, setConflictConsumed] = useState(false);
   const [conflictSlot, setConflictSlot] = useState("");
+  const [bookingError, setBookingError] = useState("");
   const [recoveringFromConflict, setRecoveringFromConflict] = useState(false);
-  const [greeting, setGreeting] = useState(() => {
-    const hour = new Date().getHours();
-    if (hour >= 6 && hour < 12) return "Good morning";
-    if (hour >= 12 && hour < 17) return "Good afternoon";
-    if (hour >= 17 && hour < 20) return "Good evening";
-    return "Ready for a late session?";
-  });
+  // Start from a deterministic value so SSR and the client's first render
+  // match; the effect below applies the real time-of-day greeting on mount.
+  const greeting = useSyncExternalStore(subscribeGreeting, getGreeting, getServerGreeting);
+  const liveSlotKey = `${screen}:${room}:${selectedDate ? dateKey(selectedDate) : "today"}`;
+  const liveSlots = liveSlotResult?.key === liveSlotKey ? liveSlotResult.slots : null;
 
   useEffect(() => {
     // Keep the prototype at the real device width on mobile. This also protects
@@ -2642,20 +2741,26 @@ export default function Home() {
     document.documentElement.style.overflowX = "clip";
     document.body.style.overflowX = "clip";
 
-    setDemoConflict(
-      new URLSearchParams(window.location.search).get("demo") === "conflict",
-    );
-    const updateGreeting = () => {
-      const hour = new Date().getHours();
-      if (hour >= 6 && hour < 12) setGreeting("Good morning");
-      else if (hour >= 12 && hour < 17) setGreeting("Good afternoon");
-      else if (hour >= 17 && hour < 20) setGreeting("Good evening");
-      else setGreeting("Ready for a late session?");
-    };
-    updateGreeting();
-    const timer = window.setInterval(updateGreeting, 60_000);
-    return () => window.clearInterval(timer);
   }, []);
+
+  const { phase: reservationPhase, nowMs: reservationNowMs } =
+    useActiveReservation(activeReservation);
+  const visibleActiveReservation =
+    reservationPhase === "completed" || reservationPhase === "cancelled"
+      ? null
+      : activeReservation;
+
+  // Once the reservation is finished or cancelled, drop it and forget it.
+  useEffect(() => {
+    if (!activeReservation) return;
+    if (reservationPhase === "completed" || reservationPhase === "cancelled") {
+      try {
+        window.localStorage.removeItem(ACTIVE_RESERVATION_STORAGE_KEY);
+      } catch {
+        // Ignore storage errors.
+      }
+    }
+  }, [reservationPhase, activeReservation]);
 
   useEffect(() => {
     let lastInteractionSoundAt = 0;
@@ -2812,6 +2917,78 @@ export default function Home() {
     }
   }, [screen]);
 
+  useEffect(() => {
+    if (!["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
+      return;
+    }
+    let cancelled = false;
+    const base = selectedDate || new Date();
+    const nextDay = new Date(base);
+    nextDay.setDate(base.getDate() + 1);
+    // Slots from midnight to 06:00 belong to the next calendar date (see
+    // bookingDateForSlots), so booked names come from two calendar dates.
+    // The operational day spans both fetches, so treat them as one logical
+    // query while allowing a failed half to use the demo fallback below.
+    resolveRoomId(room)
+      .then((roomId) =>
+        Promise.all([
+          fetchAvailability(roomId, dateKey(base)),
+          fetchAvailability(roomId, dateKey(nextDay)),
+        ]),
+      )
+      .then(([today, tomorrow]) => {
+        if (cancelled) return;
+        if (!today && !tomorrow) {
+          setLiveSlotResult({ key: liveSlotKey, slots: null });
+          return;
+        }
+        const info: Record<string, { booked: boolean; bookedBy?: string | null }> = {};
+        for (const slot of today?.slots ?? []) {
+          if (slot.startTime >= "06:00") {
+             info[slot.startTime] = { booked: slot.status !== "available", bookedBy: slot.bookedBy ?? null };
+          }
+        }
+        for (const slot of tomorrow?.slots ?? []) {
+          if (slot.startTime < "06:00") {
+             info[slot.startTime] = { booked: slot.status !== "available", bookedBy: slot.bookedBy ?? null };
+          }
+        }
+
+        // The operational day spans two API dates. Preserve live data from
+        // whichever request succeeded, and use the existing demo occupancy
+        // only for the missing half rather than treating that half as empty.
+        const demoBooked =
+          room === "MPR 2"
+            ? booked2
+            : room === "MPR 4"
+              ? booked4
+              : room === "MPR 5"
+                ? booked5
+                : booked3;
+        if (!today) {
+          for (const startTime of demoBooked) {
+            if (startTime >= "06:00") {
+              info[startTime] = { booked: true, bookedBy: null };
+            }
+          }
+        }
+        if (!tomorrow) {
+          for (const startTime of demoBooked) {
+            if (startTime < "06:00") {
+              info[startTime] = { booked: true, bookedBy: null };
+            }
+          }
+        }
+        setLiveSlotResult({ key: liveSlotKey, slots: info });
+      })
+      .catch(() => {
+        if (!cancelled) setLiveSlotResult({ key: liveSlotKey, slots: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, room, selectedDate, liveSlotKey]);
+
   const go = (next: Screen) => {
     setHistory((h) => [...h, screen]);
     setScreen(next);
@@ -2857,13 +3034,14 @@ export default function Home() {
     setDemoConflict(false);
     setConflictConsumed(false);
     setConflictSlot("");
+    setStudentName("");
     setRecoveringFromConflict(false);
   };
   const confirm = () => {
     const shouldConflict = demoConflict && !conflictConsumed;
     if (shouldConflict) {
       setConflictConsumed(true);
-      setConflictSlot(selectedSlots.at(-1) || time);
+      setConflictSlot(selectedSlots.at(-1) || "");
       go("recheck");
       window.setTimeout(() => setScreen("conflict"), 1800);
       return;
@@ -2871,35 +3049,69 @@ export default function Home() {
 
     go("recheck");
 
-    // Connect to live production backend
-    const roomId = room.includes("2") ? 2 : room.includes("3") ? 3 : room.includes("4") ? 4 : room.includes("5") ? 5 : 1;
-    const dateStr = selectedDate ? selectedDate.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
-    const startTime = selectedSlots[0] || time || "09:00";
+    setBookingError("");
+
+    // Late-night slots (00:00–06:00) belong to the next calendar date, so the
+    // submitted date must come from bookingDateForSlots, not the raw selection.
+    const dateStr = dateKey(bookingDateForSlots(selectedDate || new Date(), selectedSlots));
+    const startTime = selectedSlots[0] || "09:00";
     const endTime = selectedSlots.length > 0
       ? minutesToTime(timeToMinutes(selectedSlots[selectedSlots.length - 1]) + 30)
       : minutesToTime(timeToMinutes(startTime) + 30);
 
-    const fallbackTimer = window.setTimeout(() => setScreen("success"), 1800);
-
-    submitBooking({
-      roomId,
-      date: dateStr,
-      startTime,
-      endTime,
-      guestName: "Student Practice User",
-    })
+    resolveRoomId(room)
+      .then((roomId) =>
+        submitBooking({
+          roomId,
+          date: dateStr,
+          startTime,
+          endTime,
+          guestName: studentName.trim() || "Student Practice User",
+        }),
+      )
       .then((res) => {
-        window.clearTimeout(fallbackTimer);
         if (!res.success && res.conflictingSlots && res.conflictingSlots.length > 0) {
           setConflictConsumed(true);
           setConflictSlot(res.conflictingSlots[0]);
           setScreen("conflict");
+        } else if (!res.success) {
+          setBookingError(res.error ?? "The reservation could not be confirmed.");
+          setScreen("booking-error");
         } else {
+          const booking = res.booking;
+          if (booking) {
+            const reservation: ActiveReservation = {
+              bookingRef: booking.bookingRef,
+              roomId: booking.roomId,
+              roomName: booking.roomName,
+              date: booking.date,
+              startTime: booking.startTime,
+              endTime: booking.endTime,
+              status: booking.status,
+              bookedFor: booking.guestStudentName ?? (studentName.trim() || undefined),
+            };
+            setActiveReservation(reservation);
+            try {
+              window.localStorage.setItem(
+                ACTIVE_RESERVATION_STORAGE_KEY,
+                JSON.stringify(reservation),
+              );
+            } catch {
+              // Storage can be unavailable (private mode); the card still shows
+              // for this session via state.
+            }
+          }
+          setStudentName(booking?.guestStudentName || studentName.trim() || "Student Practice User");
           setScreen("success");
         }
       })
-      .catch(() => {
-        // Fallback already scheduled
+      .catch((error) => {
+        setBookingError(
+          error instanceof Error
+            ? error.message
+            : "The reservation could not be confirmed. Please try again.",
+        );
+        setScreen("booking-error");
       });
   };
   const availableForLocation = useMemo(() => {
@@ -3201,9 +3413,16 @@ export default function Home() {
           setSearched(false);
           go("directory-search");
         }}
-        conflict={demoConflict}
+        onSchedule={() => go("schedule")}
         greeting={greeting}
+        activeReservation={visibleActiveReservation}
+        reservationPhase={reservationPhase}
+        reservationNowMs={reservationNowMs}
       />
+    );
+  if (screen === "schedule")
+    return (
+      <ScheduleScreen back={back} />
     );
   if (screen === "date") {
     const today = new Date();
@@ -3395,9 +3614,6 @@ export default function Home() {
               }
 
               if (recoveringFromConflict && mprSelected === "MPR 5") {
-                setAlternativeOriginalTime(time);
-                setAlternativeOriginalSlots(selectedSlots);
-                setIsAlternativeRoom(true);
               } else {
                 // Time slots are room-specific. Preserve them only when the
                 // user confirms the same MPR; clear them when the room changes.
@@ -3405,9 +3621,6 @@ export default function Home() {
                   setTime("");
                   setSelectedSlots([]);
                 }
-                setIsAlternativeRoom(false);
-                setAlternativeOriginalTime("");
-                setAlternativeOriginalSlots([]);
               }
 
               setRecoveringFromConflict(false);
@@ -3427,12 +3640,12 @@ export default function Home() {
 
   if (screen === "period") {
     const periodOptions = [
-      { label: "Early Morning", range: "6:00 AM–9:00 AM" },
-      { label: "Morning", range: "9:00 AM–12:00 PM" },
-      { label: "Afternoon", range: "12:00 PM–5:00 PM" },
-      { label: "Evening", range: "5:00 PM–8:00 PM" },
-      { label: "Night", range: "8:00 PM–12:00 AM" },
-      { label: "Late Night", range: "12:00 AM–6:00 AM · next day" },
+      { label: "Early Morning", range: "06:00–09:00" },
+      { label: "Morning", range: "09:00–12:00" },
+      { label: "Afternoon", range: "12:00–17:00" },
+      { label: "Evening", range: "17:00–20:00" },
+      { label: "Night", range: "20:00–00:00" },
+      { label: "Late Night", range: "00:00–06:00 · next day" },
     ];
 
     return (
@@ -3511,20 +3724,31 @@ export default function Home() {
   const bookingDate = bookingDateForSlots(selectedDate || new Date(), selectedSlots);
 
   if (["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
+    const liveBookedStarts =
+      liveSlots !== null ? Object.keys(liveSlots).filter((t) => liveSlots[t].booked) : null;
     const baseBooked =
-      room === "MPR 2"
-        ? booked2
-        : room === "MPR 4"
-          ? booked4
-          : room === "MPR 5"
-            ? booked5
-            : booked3;
+      liveBookedStarts !== null
+        ? liveBookedStarts
+        : room === "MPR 2"
+          ? booked2
+          : room === "MPR 4"
+            ? booked4
+            : room === "MPR 5"
+              ? booked5
+              : booked3;
     const booked = new Set(baseBooked);
     if (conflictSlot) {
       booked.add(conflictSlot);
     }
+    const bookedByNames: Record<string, string> = {};
+    if (liveSlots) {
+      for (const [startTime, info] of Object.entries(liveSlots)) {
+        if (info.booked && info.bookedBy) bookedByNames[startTime] = info.bookedBy;
+      }
+    }
     return (
       <Slots
+        key={`${room}:${dateKey(selectedDate || new Date())}:${selectedPeriod ?? 0}`}
         room={room}
         date={selectedDate || new Date()}
         initialPeriod={selectedPeriod ?? 0}
@@ -3534,11 +3758,9 @@ export default function Home() {
           setTime(timeRangeLabel(slots));
         }}
         booked={booked}
+        bookedBy={bookedByNames}
         back={back}
         onChangeMpr={changeMprFromTimeSlots}
-        alternativeRoom={isAlternativeRoom}
-        originalTime={alternativeOriginalTime}
-        originalSlots={alternativeOriginalSlots}
         onContinue={() => go(`setup${room.slice(-1)}` as Screen)}
       />
     );
@@ -3779,7 +4001,6 @@ export default function Home() {
                   showStatus={false}
                   availableEquipmentLayout
                   availableStatusOnIdRow
-                  compactAvailableMobile
                 />
               </div>
             ))}
@@ -4087,17 +4308,13 @@ export default function Home() {
                     item={item}
                     showDefault
                     compactResult
-                    compactAvailableMobile
                     action={
                       !alternativeFromDirectory && canViewAlternativeMpr(item) ? (
                         <div className="flex justify-center">
                           <Button
                             onClick={() => {
                               const targetRoom = item.currentLocation;
-                              setAlternativeOriginalTime(time);
-                              setAlternativeOriginalSlots(selectedSlots);
                               setRoom(targetRoom);
-                              setIsAlternativeRoom(true);
                               go(`slots${targetRoom.slice(-1)}` as Screen);
                             }}
                             variant="ghost"
@@ -4120,7 +4337,6 @@ export default function Home() {
             <Button
               onClick={() => {
                 setRoom(sourceRoom);
-                setIsAlternativeRoom(false);
                 go("review");
               }}
               className="min-h-12 w-full rounded-2xl bg-violet-600 dark:bg-violet-600 font-semibold text-white shadow-sm dark:shadow-none hover:bg-violet-700 dark:hover:bg-violet-500 focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
@@ -4162,7 +4378,27 @@ export default function Home() {
         subtitle="Check the details before confirming."
         back={back}
       >
-        <Summary room={room} time={time} date={bookingDate} />
+        <Summary
+          room={room}
+          time={time}
+          date={bookingDate}
+          bookedFor={studentName.trim() || undefined}
+        />
+        <div className="mt-3.5 sm:mt-5">
+          <label htmlFor="student-name" className="mb-1.5 block text-sm font-semibold">
+            Your name
+          </label>
+          <Input
+            type="text"
+            value={studentName}
+            onChange={(event) => setStudentName(event.target.value)}
+            placeholder="Student Practice User"
+            maxLength={80}
+          />
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-[#9AA6BC]">
+            Shown on the time slots so others can see who is in the room.
+          </p>
+        </div>
         <div
           className={`mt-3.5 rounded-2xl border p-3.5 sm:mt-5 sm:p-4 ${
             hasIssues
@@ -4257,9 +4493,44 @@ export default function Home() {
           room={room}
           time={time}
           date={bookingDate}
+          bookedFor={studentName.trim() || undefined}
         />
         <ActionBar>
           <Primary onClick={home}>Return Home</Primary>
+        </ActionBar>
+      </Shell>
+    );
+  if (screen === "booking-error")
+    return (
+      <Shell
+        title="Reservation not confirmed"
+        subtitle="Please check the details below before trying again."
+      >
+        <div className="rounded-3xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-[#321820] p-4 sm:p-5">
+          <TriangleAlert className="text-rose-600 dark:text-rose-300" size={30} />
+          <h2 className="mt-3 text-xl font-semibold text-rose-950 dark:text-rose-200 sm:mt-4">
+            We could not complete that reservation.
+          </h2>
+          <p className="mt-1.5 text-sm leading-5 text-rose-800 dark:text-rose-200 sm:mt-2 sm:leading-6">
+            {bookingError || "Please review your selection and try again."}
+          </p>
+        </div>
+        <ActionBar>
+          <Primary
+            onClick={() => {
+              setBookingError("");
+              setScreen("review");
+            }}
+          >
+            Review and try again <ArrowRight />
+          </Primary>
+          <Button
+            variant="outline"
+            onClick={home}
+            className="min-h-10 w-full rounded-2xl border-slate-300 dark:border-[#4A556D] bg-white dark:bg-[#1B2133] py-2 text-sm font-semibold text-slate-700 dark:text-[#F5F7FF] shadow-sm hover:border-slate-400 dark:hover:border-[#657089] hover:bg-slate-50 dark:hover:bg-[#202739] hover:text-slate-900 dark:hover:text-white sm:min-h-12 sm:py-0 sm:text-base"
+          >
+            Return Home
+          </Button>
         </ActionBar>
       </Shell>
     );
@@ -4276,7 +4547,7 @@ export default function Home() {
         <div className="rounded-3xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-[#321820] p-4 sm:p-5">
           <TriangleAlert className="text-rose-600 dark:text-rose-300" size={30} />
           <h2 className="mt-3 text-xl font-semibold text-rose-950 dark:text-rose-200 sm:mt-4">
-            {conflictSlot} was just booked by someone else.
+            {slotLabel(conflictSlot)} was just booked by someone else.
           </h2>
           <p className="mt-1.5 text-sm leading-5 text-rose-800 dark:text-rose-200 sm:mt-2 sm:leading-6">
             Another student completed their booking before yours could be confirmed.
@@ -4449,7 +4720,7 @@ export default function Home() {
                     >
                       {directoryMatches.available.length ? (
                         directoryMatches.available.map((x) => (
-                          <EquipmentRow key={x.id} item={x} showDefault transparentDarkSurface compactAvailableMobile />
+                          <EquipmentRow key={x.id} item={x} showDefault transparentDarkSurface />
                         ))
                       ) : (
                         <SearchTabEmpty
@@ -4464,7 +4735,7 @@ export default function Home() {
                     >
                       {directoryMatches.unavailable.length ? (
                         directoryMatches.unavailable.map((x) => (
-                          <EquipmentRow key={x.id} item={x} showDefault transparentDarkSurface compactAvailableMobile />
+                          <EquipmentRow key={x.id} item={x} showDefault transparentDarkSurface />
                         ))
                       ) : (
                         <SearchTabEmpty
@@ -4630,7 +4901,7 @@ export default function Home() {
               )
             ) : (
               filteredAvailableItems.map((x) => (
-                <EquipmentRow key={x.id} item={x} availableEquipmentLayout compactAvailableMobile />
+                <EquipmentRow key={x.id} item={x} availableEquipmentLayout />
               ))
             )}
           </TabsContent>
@@ -4659,7 +4930,6 @@ export default function Home() {
                     key={x.id}
                     item={x}
                     availableEquipmentLayout
-                    compactAvailableMobile
                     action={
                       <div className="flex justify-center">
                         <Button
@@ -4668,7 +4938,6 @@ export default function Home() {
                           onClick={() => {
                             setAlternativeFromDirectory(true);
                             setAlternativeSourceRoom("");
-                            setIsAlternativeRoom(false);
                             setAlternativeSourceItemId(x.id);
                             setAlternativeSearchLabel(alternativeQuery.toLowerCase());
                             setQuery(alternativeQuery);
@@ -4694,18 +4963,108 @@ export default function Home() {
   return null;
 }
 
+function useActiveReservation(reservation: ActiveReservation | null) {
+  const [phase, setPhase] = useState<BookingPhase>("upcoming");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [syncedBookingRef, setSyncedBookingRef] = useState<string | null>(null);
+  const bookingRef = reservation?.bookingRef ?? null;
+
+  useEffect(() => {
+    if (!bookingRef) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      setNowMs(Date.now());
+      const status = await fetchBookingStatus(bookingRef);
+      if (cancelled || !status) return;
+      setSyncedBookingRef(bookingRef);
+      setPhase(status.phase);
+    };
+
+    sync();
+    const pollId = window.setInterval(sync, 30_000);
+    const tickId = window.setInterval(() => setNowMs(Date.now()), 30_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+      window.clearInterval(tickId);
+    };
+  }, [bookingRef]);
+
+  const displayPhase =
+    bookingRef && syncedBookingRef === bookingRef ? phase : "upcoming";
+
+  return { phase: displayPhase, nowMs };
+}
+
+function ActiveReservationCard({
+  reservation,
+  phase,
+  nowMs,
+}: {
+  reservation: ActiveReservation;
+  phase: BookingPhase;
+  nowMs: number;
+}) {
+  const inProgress = phase === "in_progress";
+  const statusLabel = inProgress ? "In progress" : "Confirmed";
+  const statusClass = inProgress
+    ? "bg-violet-500/15 text-violet-200 ring-1 ring-inset ring-violet-400/40"
+    : "bg-emerald-500/15 text-emerald-200 ring-1 ring-inset ring-emerald-400/40";
+
+  return (
+    <div className="rounded-[1.4rem] border border-white/10 bg-[#1B2133] px-4 py-3.5 text-white shadow-[0_10px_28px_rgba(15,23,42,0.28)] sm:px-5 sm:py-4">
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-emerald-300">
+          <ShieldCheck size={18} />
+        </span>
+        <strong className="min-w-0 flex-1 truncate text-base font-semibold">
+          Your Active Reservation
+        </strong>
+        <span
+          className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}
+        >
+          {statusLabel}
+        </span>
+      </div>
+      <div className="mt-2.5 flex items-center justify-between gap-3 text-sm">
+        <span className="flex min-w-0 items-center gap-1.5 text-slate-300">
+          <MapPin size={15} className="shrink-0 text-slate-400" />
+          <span className="truncate">
+            {reservation.roomName ?? "MPR"} · {reservation.date} (
+            {reservation.startTime}–{reservation.endTime})
+          </span>
+        </span>
+        <span className="shrink-0 font-mono text-xs text-slate-400">
+          {reservation.bookingRef}
+        </span>
+      </div>
+      <p className="mt-2 text-xs font-medium text-violet-300">
+        {reservationCountdownLabel(reservation, nowMs)}
+      </p>
+    </div>
+  );
+}
+
 function HomeScreen({
   onBook,
   onConflict,
   onEquipment,
-  conflict,
+  onSchedule,
   greeting,
+  activeReservation,
+  reservationPhase,
+  reservationNowMs,
 }: {
   onBook: () => void;
   onConflict: () => void;
   onEquipment: () => void;
-  conflict: boolean;
+  onSchedule: () => void;
   greeting: string;
+  activeReservation: ActiveReservation | null;
+  reservationPhase: BookingPhase;
+  reservationNowMs: number;
 }) {
   const bars = [28, 46, 64, 38, 74, 52, 34, 68, 44, 58, 30, 50];
   return (
@@ -4873,7 +5232,7 @@ function HomeScreen({
             ))}
           </div>
         </section>
-        <section className="relative flex h-full min-h-0 min-w-0 items-center overflow-hidden px-5 py-5 sm:px-10 sm:py-8 lg:min-h-screen lg:overflow-x-hidden lg:px-20">
+        <section className="relative flex h-full min-h-0 min-w-0 items-start overflow-x-hidden overflow-y-auto px-5 py-5 sm:px-10 sm:py-8 lg:min-h-screen lg:items-center lg:px-20">
           <div className="relative z-10 mx-auto w-full min-w-0 max-w-xl">
             <div className="mb-6 flex items-center justify-between sm:mb-10 lg:hidden">
               <Brand />
@@ -4892,6 +5251,13 @@ function HomeScreen({
               Book a room or check where equipment is and whether it works.
             </p>
             <div className="mt-5 space-y-3 sm:mt-8 sm:space-y-4">
+              {activeReservation && (
+                <ActiveReservationCard
+                  reservation={activeReservation}
+                  phase={reservationPhase}
+                  nowMs={reservationNowMs}
+                />
+              )}
               <HomeCard
                 dark
                 icon={<CalendarDays />}
@@ -4904,6 +5270,12 @@ function HomeScreen({
                 title="Equipment"
                 text="Check equipment locations and working conditions."
                 onClick={onEquipment}
+              />
+              <HomeCard
+                icon={<Users />}
+                title="Room Schedule"
+                text="See who is booked in each MPR today."
+                onClick={onSchedule}
               />
               <HomeCard
                 icon={<TriangleAlert />}
@@ -4958,6 +5330,115 @@ function HomeCard({
     </button>
   );
 }
+function ScheduleScreen({ back }: { back: () => void }) {
+  const [scheduleDate, setScheduleDate] = useState(() => new Date());
+  const [schedule, setSchedule] = useState<ScheduleResponse | null>(null);
+  const [failedDate, setFailedDate] = useState<string | null>(null);
+  const requestedDate = dateKey(scheduleDate);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSchedule(requestedDate).then((data) => {
+      if (cancelled) return;
+      if (data) {
+        setSchedule(data);
+        setFailedDate(null);
+      } else {
+        setFailedDate(requestedDate);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [requestedDate]);
+
+  const loadFailed = failedDate === requestedDate;
+  const isLoading = !loadFailed && schedule?.date !== requestedDate;
+
+  const days = Array.from({ length: 7 }, (_, offset) => {
+    const day = new Date();
+    day.setDate(day.getDate() + offset);
+    return day;
+  });
+
+  return (
+    <Shell
+      title="Room Schedule"
+      subtitle="See who is booked in each MPR."
+      back={back}
+    >
+      <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {days.map((day) => {
+          const selected = sameDay(day, scheduleDate);
+          return (
+            <button
+              key={day.toISOString()}
+              type="button"
+              onClick={() => setScheduleDate(day)}
+              aria-pressed={selected}
+              className={`min-h-10 shrink-0 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-semibold transition ${
+                selected
+                  ? "border-violet-600 bg-violet-600 text-white shadow-sm"
+                  : "border-violet-200 dark:border-[#30384D] bg-white dark:bg-[#1B2133] text-slate-600 dark:text-[#AAB3C7] hover:border-violet-400 dark:hover:border-violet-500"
+              }`}
+            >
+              {sameDay(day, new Date()) ? "Today" : shortDate(day)}
+            </button>
+          );
+        })}
+      </div>
+
+      {loadFailed ? (
+        <div className="mt-4 rounded-2xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-[#321820] p-4 text-sm text-rose-900 dark:text-rose-200">
+          Could not load the schedule. Please try again later.
+        </div>
+      ) : isLoading ? (
+        <p className="mt-6 text-center text-sm text-slate-500 dark:text-[#9AA6BC]">
+          Loading schedule…
+        </p>
+      ) : (
+        <div className="mt-3 space-y-3 sm:space-y-4">
+          {schedule?.rooms.map((room) => (
+            <div
+              key={room.id}
+              className="rounded-2xl border border-slate-200 dark:border-[#30384D] bg-white dark:bg-[#1B2133] p-4 shadow-sm sm:p-5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-semibold">{room.name}</h2>
+                <span className="shrink-0 text-xs font-medium text-slate-500 dark:text-[#9AA6BC]">
+                  {room.bookings.length === 0
+                    ? "Free all day"
+                    : `${room.bookings.length} booking${room.bookings.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              {room.bookings.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500 dark:text-[#9AA6BC]">
+                  No bookings yet.
+                </p>
+              ) : (
+                <ul className="mt-2.5 space-y-2">
+                  {room.bookings.map((booking) => (
+                    <li
+                      key={`${room.id}-${booking.bookingRef}-${booking.startTime}`}
+                      className="flex items-center justify-between gap-3 border-t border-slate-100 dark:border-[#252C3E] pt-2 text-sm"
+                    >
+                      <span className="shrink-0 font-semibold">
+                        {booking.startTime}–{booking.endTime}
+                      </span>
+                      <span className="min-w-0 truncate text-right text-slate-600 dark:text-[#AAB3C7]">
+                        {booking.bookedBy}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Shell>
+  );
+}
 function Slots({
   room,
   date,
@@ -4965,11 +5446,9 @@ function Slots({
   selectedSlots,
   setSelectedSlots,
   booked,
+  bookedBy,
   back,
   onChangeMpr,
-  alternativeRoom = false,
-  originalTime = "",
-  originalSlots = [],
   onContinue,
 }: {
   room: string;
@@ -4978,11 +5457,9 @@ function Slots({
   selectedSlots: string[];
   setSelectedSlots: (slots: string[]) => void;
   booked: Set<string>;
+  bookedBy: Record<string, string>;
   back: () => void;
   onChangeMpr: () => void;
-  alternativeRoom?: boolean;
-  originalTime?: string;
-  originalSlots?: string[];
   onContinue: () => void;
 }) {
   const nextDay = new Date(date);
@@ -4995,7 +5472,6 @@ function Slots({
   const initialPeriodPositionedRef = useRef(false);
   const pendingInitialPeriodRef = useRef<number | null>(null);
   const [periodScrollProgress, setPeriodScrollProgress] = useState(0);
-  const [periodScrollThumbPercent, setPeriodScrollThumbPercent] = useState(27);
   const [periodIndicatorLeft, setPeriodIndicatorLeft] = useState(0);
   const [periodIndicatorWidth, setPeriodIndicatorWidth] = useState(0);
   const [periodIntroActive, setPeriodIntroActive] = useState(false);
@@ -5020,7 +5496,6 @@ function Slots({
     // indicator, swipe/drag behavior and intro animation remain unchanged.
     pendingInitialPeriodRef.current = initialPeriod;
     initialPeriodPositionedRef.current = false;
-    setActivePeriod(initialPeriod);
   }, [date, initialPeriod]);
 
   const selectSlot = (slot: string) => {
@@ -5317,8 +5792,6 @@ function Slots({
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
-    setPeriodIntroActive(false);
-
     const chimeTimers: number[] = [];
     const start = window.setTimeout(() => {
       setPeriodIntroActive(true);
@@ -5392,15 +5865,7 @@ function Slots({
     const updatePeriodScrollIndicator = () => {
       const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
       const progress = maxScroll > 0 ? scroller.scrollLeft / maxScroll : 0;
-      const visibleRatio =
-        scroller.scrollWidth > 0
-          ? scroller.clientWidth / scroller.scrollWidth
-          : 1;
-
       setPeriodScrollProgress(Math.max(0, Math.min(1, progress)));
-      // Keep the draggable control compact. Its horizontal position comes
-      // only from the tab strip's real scroll progress.
-      setPeriodScrollThumbPercent(27);
     };
 
     updatePeriodScrollIndicator();
@@ -5616,6 +6081,7 @@ function Slots({
       `}</style>
       <div
         ref={periodTabsRef}
+        id="period-tabs"
         className="-mt-1 overflow-x-auto pb-0 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mt-0 sm:pb-1 sm:pt-1.5"
         role="tablist"
         aria-label="Time periods"
@@ -5669,6 +6135,7 @@ function Slots({
         ref={periodScrollTrackRef}
         role="scrollbar"
         aria-label="Scroll time periods"
+        aria-controls="period-tabs"
         aria-orientation="horizontal"
         aria-valuemin={0}
         aria-valuemax={100}
@@ -5790,7 +6257,14 @@ function Slots({
                         : "border-emerald-100 dark:border-emerald-800 bg-white dark:bg-[#1B2133] hover:border-emerald-400 dark:hover:border-emerald-600"
                 }`}
               >
-                <span className="font-semibold">{t}</span>
+                <span className="min-w-0">
+                  <span className="block font-semibold">{slotLabel(t)}</span>
+                  {isBooked && bookedBy[t] ? (
+                    <span className="mt-0.5 block truncate text-xs font-normal text-slate-400 dark:text-[#8F9BB2]">
+                      Booked · {bookedBy[t]}
+                    </span>
+                  ) : null}
+                </span>
                 <span
                   className={`rounded-full px-2.5 py-1 text-xs font-bold ${
                     isBooked
@@ -5882,6 +6356,9 @@ function Issue({
                   <StatusPill status={item.status} condition={item.condition} />
                 </div>
               </div>
+              <p className="mt-1.5 text-xs leading-4 text-slate-500 dark:text-[#9AA6BC]">
+                {reason}
+              </p>
             </div>
           </div>
         </div>

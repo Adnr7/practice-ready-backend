@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -57,6 +57,7 @@ export const timeSlots = sqliteTable("time_slots", {
 }, (table) => [
   index("idx_time_slots_lookup").on(table.roomId, table.date, table.status),
   index("idx_time_slots_range").on(table.roomId, table.date, table.startTime),
+  uniqueIndex("idx_time_slots_unique").on(table.roomId, table.date, table.startTime),
 ]);
 
 export const bookings = sqliteTable("bookings", {

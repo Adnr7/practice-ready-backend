@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
   hashPassword,
@@ -11,6 +11,12 @@ import {
 } from "../lib/auth.ts";
 
 describe("Edge Auth & Cryptography", () => {
+  const originalSecret = process.env.AUTH_SECRET;
+  before(() => { process.env.AUTH_SECRET = "test-only-session-secret-never-deploy"; });
+  after(() => {
+    if (originalSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = originalSecret;
+  });
   it("should hash and verify passwords using PBKDF2", async () => {
     const password = "PracticeMusic2026!";
     const { hash, salt } = await hashPassword(password);
@@ -74,8 +80,27 @@ describe("Edge Auth & Cryptography", () => {
     const parsed = parseCookies("pr_session=sample.jwt.token; other=123");
     assert.equal(parsed["pr_session"], "sample.jwt.token");
     assert.equal(parsed["other"], "123");
+    assert.deepEqual(parseCookies("bad=%ZZ; other=123"), { other: "123" });
 
     const cleared = createClearSessionCookie();
     assert.ok(cleared.includes("Max-Age=0"));
+  });
+
+  it("rejects zero-expiry tokens and tolerates malformed cookies", async () => {
+    const payload = { userId: 1, email: "test@example.com", fullName: "Test", role: "student", exp: 0 };
+    assert.equal(await verifySessionToken(await createSessionToken(payload)), null);
+    assert.deepEqual(parseCookies("bad=%ZZ; other=123"), { other: "123" });
+  });
+
+  it("requires a configured secret when signing sessions", async () => {
+    const jwtSecret = process.env.JWT_SECRET;
+    delete process.env.AUTH_SECRET;
+    delete process.env.JWT_SECRET;
+    try {
+      await assert.rejects(createSessionToken({ userId: 1, email: "test@example.com", fullName: "Test", role: "student" }), /AUTH_SECRET/);
+    } finally {
+      process.env.AUTH_SECRET = "test-only-session-secret-never-deploy";
+      if (jwtSecret !== undefined) process.env.JWT_SECRET = jwtSecret;
+    }
   });
 });

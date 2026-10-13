@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
@@ -7,8 +8,8 @@ import {
   timeSlots,
   users,
 } from "@/db/schema";
-import { hashPassword } from "@/lib/auth";
-import { generateDailyTimeSlots } from "@/lib/booking-engine";
+import { configureAuthSecret, getSessionFromRequest, hashPassword } from "@/lib/auth";
+import { generateDailyTimeSlots, getInstitutionNow } from "@/lib/booking-engine";
 import {
   SEED_EQUIPMENT,
   SEED_LOCATIONS,
@@ -20,15 +21,31 @@ export async function POST(request: Request) {
     const { searchParams } = new URL(request.url);
     const force = searchParams.get("force") === "true";
 
+    configureAuthSecret(env.AUTH_SECRET);
+    const session = await getSessionFromRequest(request);
+    const seedToken = env.SEED_TOKEN;
+    if (session?.role !== "admin" &&
+        !(seedToken && request.headers.get("authorization") === `Bearer ${seedToken}`)) {
+      return Response.json({ error: "Administrator access or a valid seed token is required." }, { status: 403 });
+    }
+
     const db = getDb();
 
     // Check if database already has rooms and slots
     const existingRooms = await db.select().from(rooms).limit(1);
     const existingSlots = await db.select().from(timeSlots).limit(1);
+
     if (existingRooms.length > 0 && existingSlots.length > 0 && !force) {
       return Response.json({
         message: "Database already seeded. Pass ?force=true to re-seed or update.",
       });
+    }
+
+    const [existingAdmin] = await db.select({ id: users.id }).from(users)
+      .where(eq(users.email, "admin@tsm.edu.in")).limit(1);
+    const adminPassword = env.ADMIN_PASSWORD;
+    if (!existingAdmin && (!adminPassword || adminPassword.length < 12)) {
+      return Response.json({ error: "Configure ADMIN_PASSWORD with at least 12 characters to bootstrap the administrator." }, { status: 503 });
     }
 
     // 1. Seed Locations
@@ -113,14 +130,8 @@ export async function POST(request: Request) {
     }
 
     // 4. Seed Default Users
-    const [existingAdmin] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, "admin@tsm.edu.in"))
-      .limit(1);
-
     if (!existingAdmin) {
-      const adminPass = await hashPassword("TSMAdmin2026!");
+      const adminPass = await hashPassword(adminPassword!);
       await db.insert(users).values({
         email: "admin@tsm.edu.in",
         passwordHash: adminPass.hash,
@@ -136,8 +147,8 @@ export async function POST(request: Request) {
       .where(eq(users.email, "student@tsm.edu.in"))
       .limit(1);
 
-    if (!existingStudent) {
-      const studentPass = await hashPassword("TSMStudent2026!");
+    if (!existingStudent && env.STUDENT_PASSWORD) {
+      const studentPass = await hashPassword(env.STUDENT_PASSWORD);
       await db.insert(users).values({
         email: "student@tsm.edu.in",
         passwordHash: studentPass.hash,
@@ -152,10 +163,10 @@ export async function POST(request: Request) {
     const activeRooms = await db.select({ id: rooms.id }).from(rooms).where(eq(rooms.isActive, true));
     let seededSlotCount = 0;
 
-    const startDate = new Date();
+    const startDate = new Date(`${getInstitutionNow().date}T00:00:00Z`);
     for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
       const d = new Date(startDate);
-      d.setDate(d.getDate() + dayOffset);
+      d.setUTCDate(d.getUTCDate() + dayOffset);
       const dateStr = d.toISOString().split("T")[0];
 
       for (const r of activeRooms) {
@@ -169,7 +180,7 @@ export async function POST(request: Request) {
           const slots = generateDailyTimeSlots(r.id, dateStr);
           // Insert in chunks of 10 (60 parameters) to stay well within D1's 100-parameter limit
           for (let i = 0; i < slots.length; i += 10) {
-            await db.insert(timeSlots).values(slots.slice(i, i + 10));
+            await db.insert(timeSlots).values(slots.slice(i, i + 10)).onConflictDoNothing();
           }
           seededSlotCount += slots.length;
         }
@@ -184,7 +195,7 @@ export async function POST(request: Request) {
         locations: locationMap.size,
         equipment: seededEquipmentCount,
         slotsGenerated: seededSlotCount,
-        accounts: ["admin@tsm.edu.in", "student@tsm.edu.in"],
+        accounts: ["admin@tsm.edu.in"],
       },
     });
   } catch (error) {

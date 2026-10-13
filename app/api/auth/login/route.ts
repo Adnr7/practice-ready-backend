@@ -1,14 +1,17 @@
+import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import {
   createSessionCookie,
   createSessionToken,
+  configureAuthSecret,
   verifyPassword,
 } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
     const body = (await request.json()) as {
       email?: string;
       password?: string;
@@ -51,7 +54,7 @@ export async function POST(request: Request) {
       email: user.email,
       fullName: user.fullName,
       studentId: user.studentId ?? undefined,
-      role: user.role as any,
+      role: user.role,
     });
 
     const userProfile = {

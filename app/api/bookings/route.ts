@@ -1,15 +1,20 @@
+import { env } from "cloudflare:workers";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bookings, bookingSlots, rooms, timeSlots } from "@/db/schema";
-import { getSessionFromRequest } from "@/lib/auth";
+import { bookings, rooms, timeSlots } from "@/db/schema";
+import { reserveSlots, isBookingReferenceConflict, type StoredBooking } from "@/lib/booking-store";
+import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
 import {
   generateBookingReference,
   generateDailyTimeSlots,
+  getInstitutionNow,
+  isBookingElapsed,
   validateBookingRequest,
 } from "@/lib/booking-engine";
 
 export async function GET(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
     const session = await getSessionFromRequest(request);
     const { searchParams } = new URL(request.url);
     const filter = searchParams.get("filter"); // upcoming | past | all
@@ -47,21 +52,39 @@ export async function GET(request: Request) {
       ? await baseQuery.where(userCondition).orderBy(desc(bookings.date), desc(bookings.startTime))
       : await baseQuery.orderBy(desc(bookings.date), desc(bookings.startTime));
 
-    const today = new Date().toISOString().split("T")[0];
+    const now = getInstitutionNow();
+
+    // Reconcile reservations whose entire window has already elapsed: a
+    // "confirmed" booking for a date/time that has passed is no longer active
+    // and should not be presented as an active reservation.
+    const staleIds = allBookings
+      .filter((b) => b.status === "confirmed" && isBookingElapsed(b.date, b.endTime, now))
+      .map((b) => b.id);
+
+    if (staleIds.length > 0) {
+      await db
+        .update(bookings)
+        .set({ status: "completed" })
+        .where(inArray(bookings.id, staleIds));
+    }
+
+    const reconciled = allBookings.map((b) =>
+      staleIds.includes(b.id) ? { ...b, status: "completed" as const } : b
+    );
 
     if (filter === "upcoming") {
       return Response.json({
-        bookings: allBookings.filter((b) => b.date >= today && b.status === "confirmed"),
+        bookings: reconciled.filter((b) => b.status === "confirmed"),
       });
     }
 
     if (filter === "past") {
       return Response.json({
-        bookings: allBookings.filter((b) => b.date < today || b.status !== "confirmed"),
+        bookings: reconciled.filter((b) => b.status !== "confirmed"),
       });
     }
 
-    return Response.json({ bookings: allBookings });
+    return Response.json({ bookings: reconciled });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
     return Response.json({ error: message }, { status: 500 });
@@ -70,6 +93,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
     const body = (await request.json()) as {
       roomId?: number;
       date?: string;
@@ -84,7 +108,7 @@ export async function POST(request: Request) {
     const startTime = body.startTime?.trim();
     const endTime = body.endTime?.trim();
 
-    if (!roomId || !date || !startTime || !endTime) {
+    if (!Number.isSafeInteger(roomId) || roomId <= 0 || !date || !startTime || !endTime) {
       return Response.json(
         { error: "roomId, date, startTime, and endTime are required fields." },
         { status: 400 }
@@ -116,86 +140,48 @@ export async function POST(request: Request) {
     // Identify user or fallback to guest for evaluation demo
     const session = await getSessionFromRequest(request);
     const userId = session?.userId ?? null;
-    const guestStudentName = userId ? null : (body.guestName?.trim() || "Student Practice User");
+    const guestStudentName = userId
+      ? null
+      : (body.guestName ?? "").trim().slice(0, 120) || "Student Practice User";
     const guestStudentId = userId ? null : (body.guestStudentId?.trim() || "TSM-2026-GUEST");
 
-    // Fetch existing slots for this room & date
-    let existingSlots = await db
-      .select()
-      .from(timeSlots)
-      .where(and(eq(timeSlots.roomId, roomId), eq(timeSlots.date, date)));
+    // Fill missing rows as well as empty dates. The unique index makes this
+    // idempotent when availability and booking requests arrive concurrently.
+    const dailySlots = generateDailyTimeSlots(roomId, date);
+    for (let i = 0; i < dailySlots.length; i += 10) {
+      await db.insert(timeSlots).values(dailySlots.slice(i, i + 10)).onConflictDoNothing();
+    }
 
-    // If slots not yet generated for date, create them
-    if (existingSlots.length === 0) {
-      const dailySlots = generateDailyTimeSlots(roomId, date);
-      for (let i = 0; i < dailySlots.length; i += 10) {
-        await db.insert(timeSlots).values(dailySlots.slice(i, i + 10));
+    let newBooking: StoredBooking | null = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        newBooking = await reserveSlots(db.$client, {
+          bookingRef: generateBookingReference(),
+          userId, guestStudentName, guestStudentId, roomId, date, startTime, endTime,
+          durationMinutes: validation.durationMinutes!,
+        }, validation.requiredSlots);
+      } catch (error) {
+        if (isBookingReferenceConflict(error) && attempt < 4) continue;
+        throw error;
       }
 
-      existingSlots = await db
-        .select()
-        .from(timeSlots)
-        .where(and(eq(timeSlots.roomId, roomId), eq(timeSlots.date, date)));
+      if (!newBooking) {
+        const slots = await db.select().from(timeSlots).where(and(
+          eq(timeSlots.roomId, roomId), eq(timeSlots.date, date),
+          inArray(timeSlots.startTime, validation.requiredSlots),
+        ));
+        return Response.json(
+          {
+            error: "Booking conflict detected: One or more selected time slots have already been reserved.",
+            conflictingSlots: slots.filter((slot) => slot.status !== "available").map((slot) => slot.startTime),
+          },
+          { status: 409 },
+        );
+      }
+      break;
     }
 
-    // Find requested slots
-    const targetSlots = existingSlots.filter((s) => validation.requiredSlots!.includes(s.startTime));
-
-    // Check for conflicts
-    const conflictingSlots = targetSlots
-      .filter((s) => s.status !== "available")
-      .map((s) => s.startTime);
-
-    if (conflictingSlots.length > 0) {
-      return Response.json(
-        {
-          error: "Booking conflict detected: One or more selected time slots have already been reserved.",
-          conflictingSlots,
-        },
-        { status: 409 }
-      );
-    }
-
-    // If any requested slot is somehow missing from generated slots
-    if (targetSlots.length !== validation.requiredSlots.length) {
-      return Response.json(
-        { error: "One or more requested time slots are outside bookable hours." },
-        { status: 400 }
-      );
-    }
-
-    // Atomic insert booking + booking_slots + update time_slots
-    const bookingRef = generateBookingReference();
-
-    const [newBooking] = await db
-      .insert(bookings)
-      .values({
-        bookingRef,
-        userId,
-        guestStudentName,
-        guestStudentId,
-        roomId,
-        date,
-        startTime,
-        endTime,
-        durationMinutes: validation.durationMinutes!,
-        status: "confirmed",
-      })
-      .returning();
-
-    // Link booking to time slots
-    const slotLinks = targetSlots.map((slot) => ({
-      bookingId: newBooking.id,
-      timeSlotId: slot.id,
-    }));
-    await db.insert(bookingSlots).values(slotLinks);
-
-    // Mark slots as booked
-    const targetSlotIds = targetSlots.map((s) => s.id);
-    await db
-      .update(timeSlots)
-      .set({ status: "booked" })
-      .where(inArray(timeSlots.id, targetSlotIds));
+    if (!newBooking) throw new Error("Could not generate a unique booking reference.");
 
     return Response.json(
       {
@@ -208,6 +194,7 @@ export async function POST(request: Request) {
           startTime: newBooking.startTime,
           endTime: newBooking.endTime,
           durationMinutes: newBooking.durationMinutes,
+          guestStudentName: newBooking.guestStudentName,
           status: newBooking.status,
           createdAt: newBooking.createdAt,
         },

@@ -12,7 +12,11 @@ export interface SessionPayload {
   exp: number; // Unix epoch in seconds
 }
 
-const DEFAULT_SECRET = "practice-ready-tsm-university-edge-secret-2026";
+let configuredAuthSecret: string | undefined;
+
+export function configureAuthSecret(secret?: string): void {
+  if (secret) configuredAuthSecret = secret;
+}
 
 function getSecretKey(): string {
   if (typeof process !== "undefined" && process.env?.AUTH_SECRET) {
@@ -21,7 +25,8 @@ function getSecretKey(): string {
   if (typeof process !== "undefined" && process.env?.JWT_SECRET) {
     return process.env.JWT_SECRET;
   }
-  return DEFAULT_SECRET;
+  if (configuredAuthSecret) return configuredAuthSecret;
+  throw new Error("AUTH_SECRET must be configured before using authentication.");
 }
 
 function base64UrlEncode(buffer: ArrayBuffer | Uint8Array): string {
@@ -181,7 +186,9 @@ export async function verifySessionToken(
     const payload = JSON.parse(payloadJson) as SessionPayload;
 
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) {
+    if (!Number.isFinite(payload.exp) || payload.exp <= now ||
+        !Number.isSafeInteger(payload.userId) || payload.userId <= 0 ||
+        !["student", "technician", "admin"].includes(payload.role)) {
       return null;
     }
 
@@ -200,7 +207,11 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
   for (const part of cookieHeader.split(";")) {
     const [name, ...rest] = part.trim().split("=");
     if (name) {
-      cookies[name] = decodeURIComponent(rest.join("="));
+      try {
+        cookies[name] = decodeURIComponent(rest.join("="));
+      } catch {
+        // Ignore malformed cookies rather than failing the entire request.
+      }
     }
   }
   return cookies;

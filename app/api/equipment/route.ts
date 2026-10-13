@@ -1,7 +1,10 @@
-import { and, eq, ilike, like, or } from "drizzle-orm";
+import { and, eq, like, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@/db";
-import { equipment, locations, rooms } from "@/db/schema";
+import { equipment, locations } from "@/db/schema";
+
+const EQUIPMENT_STATUSES = ["ready", "away", "attention", "service", "missing"] as const;
+type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 
 export async function GET(request: Request) {
   try {
@@ -41,7 +44,10 @@ export async function GET(request: Request) {
     }
 
     if (status) {
-      conditions.push(eq(equipment.status, status as any));
+      if (!EQUIPMENT_STATUSES.includes(status as EquipmentStatus)) {
+        return Response.json({ error: "Invalid equipment status." }, { status: 400 });
+      }
+      conditions.push(eq(equipment.status, status as EquipmentStatus));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;

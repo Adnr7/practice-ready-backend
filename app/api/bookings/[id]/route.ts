@@ -1,17 +1,21 @@
-import { eq, inArray } from "drizzle-orm";
+import { env } from "cloudflare:workers";
+import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bookings, bookingSlots, timeSlots } from "@/db/schema";
-import { getSessionFromRequest } from "@/lib/auth";
+import { bookings } from "@/db/schema";
+import { cancelStoredBooking } from "@/lib/booking-store";
+import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
+import { getInstitutionNow, isStartInPast } from "@/lib/booking-engine";
 
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
     const { id: idParam } = await params;
-    const id = parseInt(idParam, 10);
+    const id = Number(idParam);
 
-    if (isNaN(id) || id <= 0) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
       return Response.json(
         { error: "Booking ID must be a positive integer." },
         { status: 400 }
@@ -34,9 +38,7 @@ export async function DELETE(
     // Verify ownership or staff permissions
     const isOwner = session && booking.userId === session.userId;
     const isStaff = session && (session.role === "admin" || session.role === "technician");
-    const isGuestBooking = !booking.userId;
-
-    if (!isOwner && !isStaff && !isGuestBooking) {
+    if (!isOwner && !isStaff) {
       return Response.json(
         { error: "Forbidden: You do not have permission to cancel this booking." },
         { status: 403 }
@@ -50,27 +52,18 @@ export async function DELETE(
       );
     }
 
-    // Retrieve linked time slots
-    const linkedSlots = await db
-      .select({ timeSlotId: bookingSlots.timeSlotId })
-      .from(bookingSlots)
-      .where(eq(bookingSlots.bookingId, id));
-
-    const slotIds = linkedSlots.map((s) => s.timeSlotId);
-
-    // Free time slots back to available
-    if (slotIds.length > 0) {
-      await db
-        .update(timeSlots)
-        .set({ status: "available" })
-        .where(inArray(timeSlots.id, slotIds));
+    // Policy: reservations may only be cancelled before their start time.
+    if (isStartInPast(booking.date, booking.startTime, getInstitutionNow())) {
+      return Response.json(
+        {
+          error:
+            "This reservation has already started and can no longer be cancelled.",
+        },
+        { status: 409 }
+      );
     }
 
-    // Mark booking as cancelled
-    await db
-      .update(bookings)
-      .set({ status: "cancelled" })
-      .where(eq(bookings.id, id));
+    await cancelStoredBooking(db.$client, id);
 
     return Response.json({
       success: true,

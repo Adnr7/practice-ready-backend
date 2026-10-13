@@ -32,6 +32,108 @@ export interface BookingValidationResult {
 }
 
 /**
+ * The practice-room schedule runs on the institution's wall clock.
+ * True School of Music operates in India, which is a fixed UTC+05:30 offset
+ * (no daylight saving), so a constant offset keeps "today" and "now"
+ * consistent across edge runtimes regardless of the Worker host timezone.
+ */
+export const INSTITUTION_UTC_OFFSET_MINUTES = 330;
+
+/**
+ * Bookable hours per calendar date: 00:00 to 24:00 (midnight).
+ * The institution's operational day runs 06:00-06:00, so the "late-night"
+ * period (00:00-06:00) belongs to the previous operational day but lives on
+ * the next calendar date. Because slot rows are keyed by calendar date, the
+ * full day 00:00-24:00 must be bookable for after-midnight selections to work.
+ */
+export const BOOKING_WINDOW_START_MINUTES = 0;
+export const BOOKING_WINDOW_END_MINUTES = 1440;
+
+export interface InstitutionNow {
+  date: string; // YYYY-MM-DD on the institution's wall clock
+  minutes: number; // minutes elapsed since local midnight
+}
+
+/**
+ * Returns the current date and time-of-day on the institution's wall clock.
+ * Accepts an optional epoch (ms) for deterministic testing.
+ */
+export function getInstitutionNow(nowMs: number = Date.now()): InstitutionNow {
+  const shifted = new Date(nowMs + INSTITUTION_UTC_OFFSET_MINUTES * 60_000);
+  const year = shifted.getUTCFullYear();
+  const month = shifted.getUTCMonth() + 1;
+  const day = shifted.getUTCDate();
+  const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+  return { date, minutes };
+}
+
+export function isValidCalendarDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+
+/**
+ * Converts an end time into minutes, treating "00:00" as the end of the
+ * operational day (1440) so that the final 23:30–00:00 slot is bookable.
+ */
+export function normalizeEndMinutes(endTime: string): number {
+  return endTime === "00:00" ? 1440 : timeToMinutes(endTime);
+}
+
+/**
+ * True when a booking start has already passed on the institution clock.
+ * A start exactly on the current minute is still considered upcoming.
+ */
+export function isStartInPast(
+  date: string,
+  startTime: string,
+  now: InstitutionNow = getInstitutionNow()
+): boolean {
+  if (date < now.date) return true;
+  if (date > now.date) return false;
+  return timeToMinutes(startTime) < now.minutes;
+}
+
+/**
+ * True when a booking's entire window has elapsed on the institution clock.
+ */
+export function isBookingElapsed(
+  date: string,
+  endTime: string,
+  now: InstitutionNow = getInstitutionNow()
+): boolean {
+  if (date < now.date) return true;
+  if (date > now.date) return false;
+  return normalizeEndMinutes(endTime) <= now.minutes;
+}
+
+export type BookingPhase =
+  | "upcoming"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+/**
+ * Derives the presentational phase of a booking from its stored status and the
+ * institution clock. Stored terminal statuses win over the clock.
+ */
+export function deriveBookingPhase(
+  date: string,
+  startTime: string,
+  endTime: string,
+  status: "confirmed" | "cancelled" | "completed",
+  now: InstitutionNow = getInstitutionNow()
+): BookingPhase {
+  if (status === "cancelled") return "cancelled";
+  if (status === "completed") return "completed";
+  if (isBookingElapsed(date, endTime, now)) return "completed";
+  if (isStartInPast(date, startTime, now)) return "in_progress";
+  return "upcoming";
+}
+
+/**
  * Converts "HH:MM" to total minutes from midnight.
  */
 export function timeToMinutes(time: string): number {
@@ -66,25 +168,30 @@ export function getTimePeriod(time: string): TimePeriod {
 /**
  * Validates a booking request according to university policy.
  */
-export function validateBookingRequest(params: {
-  date: string;
-  startTime: string;
-  endTime: string;
-}): BookingValidationResult {
+export function validateBookingRequest(
+  params: {
+    date: string;
+    startTime: string;
+    endTime: string;
+  },
+  now: InstitutionNow = getInstitutionNow()
+): BookingValidationResult {
   const { date, startTime, endTime } = params;
 
-  // Validate date format (YYYY-MM-DD)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return { valid: false, error: "Invalid date format. Expected YYYY-MM-DD." };
+  if (!isValidCalendarDate(date)) {
+    return { valid: false, error: "Invalid date. Expected a real calendar date in YYYY-MM-DD format." };
   }
 
-  // Validate time formats (HH:MM)
-  if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) {
+  // Validate time formats (HH:MM, 24h)
+  if (
+    !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
+    !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)
+  ) {
     return { valid: false, error: "Invalid time format. Expected HH:MM." };
   }
 
   const startMins = timeToMinutes(startTime);
-  const endMins = timeToMinutes(endTime);
+  const endMins = normalizeEndMinutes(endTime);
 
   // Must be in 30-minute intervals
   if (startMins % 30 !== 0 || endMins % 30 !== 0) {
@@ -120,6 +227,30 @@ export function validateBookingRequest(params: {
     };
   }
 
+  // Enforce the per-calendar-date bookable window (00:00-24:00)
+  if (startMins < BOOKING_WINDOW_START_MINUTES || endMins > BOOKING_WINDOW_END_MINUTES) {
+    return {
+      valid: false,
+      error: "Requested time is outside bookable hours (00:00-24:00).",
+    };
+  }
+
+  // Reject bookings for dates that have already passed
+  if (date < now.date) {
+    return {
+      valid: false,
+      error: "Bookings cannot be made for past dates. Please choose today or a future date.",
+    };
+  }
+
+  // Reject bookings whose start time has already passed today
+  if (isStartInPast(date, startTime, now)) {
+    return {
+      valid: false,
+      error: "This time slot has already started or passed. Please choose a later time.",
+    };
+  }
+
   // Compute all continuous 30-minute slot start times
   const requiredSlots: string[] = [];
   for (let m = startMins; m < endMins; m += 30) {
@@ -134,8 +265,9 @@ export function validateBookingRequest(params: {
 }
 
 /**
- * Generates all 36 standard 30-minute slots for a given room and date.
- * From 06:00 to 00:00 (midnight).
+ * Generates all 48 standard 30-minute slots for a given room and date,
+ * covering the full calendar day: 00:00-06:00 (the late-night tail of the
+ * previous operational day) plus 06:00-24:00 (the day's main grid).
  */
 export function generateDailyTimeSlots(
   roomId: number,
@@ -143,8 +275,8 @@ export function generateDailyTimeSlots(
 ): TimeSlotDef[] {
   const slots: TimeSlotDef[] = [];
 
-  // 06:00 is 360 mins; 24:00 is 1440 mins
-  for (let m = 360; m < 1440; m += 30) {
+  // 00:00 is 0 mins; 24:00 is 1440 mins
+  for (let m = 0; m < 1440; m += 30) {
     const startTime = minutesToTime(m);
     const endTime = minutesToTime(m + 30);
     const period = getTimePeriod(startTime);
@@ -166,7 +298,7 @@ export function generateDailyTimeSlots(
  * Generates an institutional booking reference code (e.g. PR-2026-7842).
  */
 export function generateBookingReference(): string {
-  const year = new Date().getFullYear();
-  const randomPart = Math.floor(1000 + Math.random() * 9000);
+  const year = getInstitutionNow().date.slice(0, 4);
+  const randomPart = 1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000);
   return `PR-${year}-${randomPart}`;
 }

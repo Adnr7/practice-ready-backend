@@ -181,6 +181,24 @@ Install dependencies:
 pnpm install
 ```
 
+Configure local/runtime secrets before using authentication or seeding:
+
+```bash
+cat > .dev.vars <<'EOF'
+AUTH_SECRET=replace-with-a-long-random-session-secret
+SEED_TOKEN=replace-with-a-separate-seed-token
+ADMIN_PASSWORD=replace-with-a-strong-admin-password
+# Optional demo student account:
+# STUDENT_PASSWORD=replace-with-a-strong-student-password
+EOF
+```
+
+For Cloudflare deployment, store the same values with `wrangler secret put`
+instead of committing them. Seeding requires an authenticated administrator or
+an `Authorization: Bearer <SEED_TOKEN>` request. Public registration always
+creates student accounts; technician and admin accounts must be provisioned by
+an administrator or the seed process.
+
 Generate database migrations:
 
 ```bash
@@ -224,4 +242,3 @@ npx vinext start
    ```bash
    curl -X POST https://<your-worker>.workers.dev/api/seed
    ```
-

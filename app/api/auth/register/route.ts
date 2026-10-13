@@ -1,14 +1,20 @@
+import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import {
   createSessionCookie,
   createSessionToken,
+  configureAuthSecret,
   hashPassword,
 } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
+    if (!env.AUTH_SECRET && !process.env.AUTH_SECRET && !process.env.JWT_SECRET) {
+      return Response.json({ error: "Authentication is not configured." }, { status: 503 });
+    }
     const body = (await request.json()) as {
       email?: string;
       password?: string;
@@ -21,7 +27,9 @@ export async function POST(request: Request) {
     const password = body.password?.trim();
     const fullName = body.fullName?.trim();
     const studentId = body.studentId?.trim();
-    const role = body.role === "technician" || body.role === "admin" ? body.role : "student";
+    // Public registration can only create student accounts. Staff roles must
+    // be provisioned by an administrator or the seed process.
+    const role = "student" as const;
 
     if (!email || !password || !fullName) {
       return Response.json(
@@ -76,7 +84,7 @@ export async function POST(request: Request) {
       email: inserted.email,
       fullName: inserted.fullName,
       studentId: inserted.studentId ?? undefined,
-      role: inserted.role as any,
+      role: inserted.role,
     });
 
     const userProfile = {

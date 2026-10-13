@@ -1,10 +1,12 @@
+import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
-import { getSessionFromRequest } from "@/lib/auth";
+import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
     const session = await getSessionFromRequest(request);
     if (!session) {
       return Response.json({ user: null });

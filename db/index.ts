@@ -2,18 +2,14 @@ import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
-export function getDb(customDb?: any) {
+export function getDb(customDb?: D1Database) {
   let dbBinding = customDb;
   if (!dbBinding) {
     try {
-      dbBinding = (env as any)?.DB;
+      dbBinding = env.DB;
     } catch {
       // In non-worker environments (e.g. CLI/tests)
     }
-  }
-
-  if (!dbBinding && typeof process !== "undefined" && (process.env as any)?.DB) {
-    dbBinding = (process.env as any).DB;
   }
 
   if (!dbBinding) {

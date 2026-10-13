@@ -9,9 +9,9 @@ export async function GET(
 ) {
   try {
     const { roomId: roomIdParam } = await params;
-    const roomId = parseInt(roomIdParam, 10);
+    const roomId = Number(roomIdParam);
 
-    if (isNaN(roomId) || roomId <= 0) {
+    if (!Number.isSafeInteger(roomId) || roomId <= 0) {
       return Response.json(
         { error: "roomId must be a positive integer." },
         { status: 400 }
