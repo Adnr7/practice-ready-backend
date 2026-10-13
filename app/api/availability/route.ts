@@ -73,7 +73,10 @@ export async function GET(request: Request) {
 
       // Auto-generate standard daily slots if none exist yet for this date
       if (slots.length < 48) {
-        const generated = generateDailyTimeSlots(roomId, dateParam);
+        const existingStartTimes = new Set(slots.map((slot) => slot.startTime));
+        const generated = generateDailyTimeSlots(roomId, dateParam).filter(
+          (slot) => !existingStartTimes.has(slot.startTime),
+        );
         for (let i = 0; i < generated.length; i += 10) {
           await db.insert(timeSlots).values(generated.slice(i, i + 10)).onConflictDoNothing();
         }

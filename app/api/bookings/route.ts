@@ -145,11 +145,17 @@ export async function POST(request: Request) {
       : (body.guestName ?? "").trim().slice(0, 120) || "Student Practice User";
     const guestStudentId = userId ? null : (body.guestStudentId?.trim() || "TSM-2026-GUEST");
 
-    // Fill missing rows as well as empty dates. The unique index makes this
-    // idempotent when availability and booking requests arrive concurrently.
+    // Fill missing rows without appending another copy of an old grid when a
+    // legacy database has not received the unique index migration yet.
     const dailySlots = generateDailyTimeSlots(roomId, date);
-    for (let i = 0; i < dailySlots.length; i += 10) {
-      await db.insert(timeSlots).values(dailySlots.slice(i, i + 10)).onConflictDoNothing();
+    const existingSlots = await db
+      .select({ startTime: timeSlots.startTime })
+      .from(timeSlots)
+      .where(and(eq(timeSlots.roomId, roomId), eq(timeSlots.date, date)));
+    const existingStartTimes = new Set(existingSlots.map((slot) => slot.startTime));
+    const missingSlots = dailySlots.filter((slot) => !existingStartTimes.has(slot.startTime));
+    for (let i = 0; i < missingSlots.length; i += 10) {
+      await db.insert(timeSlots).values(missingSlots.slice(i, i + 10)).onConflictDoNothing();
     }
 
     let newBooking: StoredBooking | null = null;
