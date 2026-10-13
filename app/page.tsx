@@ -2715,10 +2715,6 @@ export default function Home() {
   const [directoryTab, setDirectoryTab] = useState("available");
   const statusTabClass =
     "rounded-xl font-medium text-slate-500 dark:text-[#9AA6BC] data-[state=active]:bg-white dark:data-[state=active]:bg-[#252C3E] data-[state=active]:text-violet-700 dark:data-[state=active]:text-violet-200 data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-violet-300 dark:data-[state=active]:ring-violet-500/70";
-  const mounted = useSyncExternalStore(subscribeHydration, getClientSnapshot, getServerSnapshot);
-  const [demoOverride, setDemoConflict] = useState<boolean | null>(null);
-  const demoConflict = demoOverride ?? (mounted && new URLSearchParams(window.location.search).get("demo") === "conflict");
-  const [conflictConsumed, setConflictConsumed] = useState(false);
   const [conflictSlot, setConflictSlot] = useState("");
   const [bookingError, setBookingError] = useState("");
   const [recoveringFromConflict, setRecoveringFromConflict] = useState(false);
@@ -3031,22 +3027,11 @@ export default function Home() {
     setLocation("");
     setLocationQuery("");
     setDirectoryTab("available");
-    setDemoConflict(false);
-    setConflictConsumed(false);
     setConflictSlot("");
     setStudentName("");
     setRecoveringFromConflict(false);
   };
   const confirm = () => {
-    const shouldConflict = demoConflict && !conflictConsumed;
-    if (shouldConflict) {
-      setConflictConsumed(true);
-      setConflictSlot(selectedSlots.at(-1) || "");
-      go("recheck");
-      window.setTimeout(() => setScreen("conflict"), 1800);
-      return;
-    }
-
     go("recheck");
 
     setBookingError("");
@@ -3071,7 +3056,6 @@ export default function Home() {
       )
       .then((res) => {
         if (!res.success && res.conflictingSlots && res.conflictingSlots.length > 0) {
-          setConflictConsumed(true);
           setConflictSlot(res.conflictingSlots[0]);
           setScreen("conflict");
         } else if (!res.success) {
@@ -3395,15 +3379,6 @@ export default function Home() {
     return (
       <HomeScreen
         onBook={() => {
-          setDemoConflict(false);
-          setConflictConsumed(false);
-          setConflictSlot("");
-          setRecoveringFromConflict(false);
-          go("date");
-        }}
-        onConflict={() => {
-          setDemoConflict(true);
-          setConflictConsumed(false);
           setConflictSlot("");
           setRecoveringFromConflict(false);
           go("date");
@@ -5049,7 +5024,6 @@ function ActiveReservationCard({
 
 function HomeScreen({
   onBook,
-  onConflict,
   onEquipment,
   onSchedule,
   greeting,
@@ -5058,7 +5032,6 @@ function HomeScreen({
   reservationNowMs,
 }: {
   onBook: () => void;
-  onConflict: () => void;
   onEquipment: () => void;
   onSchedule: () => void;
   greeting: string;
@@ -5277,13 +5250,6 @@ function HomeScreen({
                 text="See who is booked in each MPR today."
                 onClick={onSchedule}
               />
-              <HomeCard
-                icon={<TriangleAlert />}
-                title="Booking Conflict Demo"
-                text="See what happens when another student books your selected slot first."
-                onClick={onConflict}
-                className="!bg-[#F0ECFF] hover:!bg-[#EAE4FF] dark:!bg-[#1B2133] dark:hover:!bg-[#202739]"
-              />
             </div>
           </div>
         </section>
@@ -5297,19 +5263,17 @@ function HomeCard({
   title,
   text,
   onClick,
-  className = "",
 }: {
   dark?: boolean;
   icon: React.ReactNode;
   title: string;
   text: string;
   onClick: () => void;
-  className?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`group flex w-full min-w-0 max-w-full items-center gap-3 rounded-[1.4rem] px-4 py-3.5 text-left shadow-sm transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-300 sm:gap-4 sm:p-5 ${dark ? "bg-[#20284A] text-white hover:bg-[#28335A] dark:border dark:border-violet-500/60 dark:bg-[#21183d] dark:shadow-[0_10px_28px_rgba(124,58,237,0.16)] dark:hover:border-violet-400/80 dark:hover:bg-[#2a1d4b]" : "border border-violet-200 dark:border-[#30384D] bg-[#F1EDFF] dark:bg-[#1B2133] text-[#151a31] dark:text-[#F5F7FF] shadow-violet-100/70 dark:shadow-none hover:border-violet-300 dark:hover:border-violet-500/70 hover:bg-[#EAE4FF] dark:hover:bg-[#202739]"} ${className}`}
+      className={`group flex w-full min-w-0 max-w-full items-center gap-3 rounded-[1.4rem] px-4 py-3.5 text-left shadow-sm transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-300 sm:gap-4 sm:p-5 ${dark ? "bg-[#20284A] text-white hover:bg-[#28335A] dark:border dark:border-violet-500/60 dark:bg-[#21183d] dark:shadow-[0_10px_28px_rgba(124,58,237,0.16)] dark:hover:border-violet-400/80 dark:hover:bg-[#2a1d4b]" : "border border-violet-200 dark:border-[#30384D] bg-[#F1EDFF] dark:bg-[#1B2133] text-[#151a31] dark:text-[#F5F7FF] shadow-violet-100/70 dark:shadow-none hover:border-violet-300 dark:hover:border-violet-500/70 hover:bg-[#EAE4FF] dark:hover:bg-[#202739]"}`}
     >
       <span
         className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl sm:h-12 sm:w-12 sm:rounded-2xl ${dark ? "bg-violet-500 dark:bg-violet-500" : "bg-violet-600 text-white"}`}

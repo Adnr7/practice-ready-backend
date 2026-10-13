@@ -282,7 +282,7 @@ import {
 - [ ] **Step 5: `app/page.tsx` — wire the home card and route**
 
 - HomeScreen props (line ~4787): add `onSchedule: () => void;` to the type and destructure.
-- Insert a new card between the Equipment card and the Booking Conflict Demo card (line ~4996):
+- Insert a new card after the Equipment card:
 
 ```tsx
               <HomeCard

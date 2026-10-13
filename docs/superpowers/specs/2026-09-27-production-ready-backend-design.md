@@ -11,7 +11,7 @@
 
 **Practice Ready** is an HCI/UI-UX product built for the True School of Music (TSM) to solve critical operational challenges around Music Practice Room (MPR) bookings and equipment readiness.
 
-The current system has an evaluated, highly responsive frontend with subtle music/audio layers, consecutive slot selection, equipment tracking, and simulated conflict demos, but relies on hardcoded in-memory state.
+The current system has an evaluated, highly responsive frontend with subtle music/audio layers, consecutive slot selection, and equipment tracking, but relies on hardcoded in-memory state.
 
 This specification details the production-ready backend architecture designed for institutional sale to a university or music conservatory. The backend provides:
 1. **Persistent Cloudflare D1 Database** via **Drizzle ORM** with relational integrity, cascading slot assignments, and indexed queries.

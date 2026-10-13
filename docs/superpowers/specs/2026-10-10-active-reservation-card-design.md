@@ -62,7 +62,7 @@ unit-testable and shared by the route.
   `fetchBookingStatus(ref)` with the usual null-on-failure fallback.
 - On successful booking in `confirm()`, persist the returned booking to
   `localStorage` under `practice-ready-active-reservation` (and set state).
-  Only the most recent booking is kept (overwrite). The demo-conflict path
+  Only the most recent booking is kept (overwrite). A rejected booking
   creates no reservation and stores nothing.
 - New `useActiveReservation()` hook in `app/page.tsx`: SSR-safe hydrate from
   storage in an effect, poll `fetchBookingStatus` every 30s, tick a local clock

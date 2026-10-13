@@ -54,7 +54,7 @@ Users can:
 - View default location, current location and working condition where relevant.
 - Search for alternatives when assigned equipment is unavailable.
 - Recover from equipment-availability issues without implying that equipment can be borrowed or relocated.
-- Experience a simulated simultaneous-booking conflict through the dedicated **Booking Conflict Demo** and recover by adjusting the selected time or choosing another MPR.
+- Recover from a real booking conflict by adjusting the selected time or choosing another MPR.
 
 Equipment search supports meaningful partial terms, word prefixes, common aliases and equipment-specific combinations across the Equipment Directory, MPR equipment lists, location browsing and contextual alternative searches. Results prioritize the actual requested equipment type before related accessories or label matches, preserve the established location order, avoid unintended substring matches and automatically open the Unavailable tab when no available matches exist but unavailable matches do.
 

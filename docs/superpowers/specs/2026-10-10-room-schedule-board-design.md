@@ -40,7 +40,7 @@ only — no emails or student IDs, same privacy policy as the slots screen).
 ### Frontend
 
 - Home screen gains a third card "Room Schedule" (after Book a Room and
-  Equipment, before the conflict-demo card): "See who is booked in each MPR."
+  Equipment): "See who is booked in each MPR."
 - New `schedule` screen: a 7-day rolling date strip (today first, same window
   as booking) plus one card per active MPR listing booked ranges
   `09:00–09:30 · Ada Okafor`, or "No bookings yet." One fetch per date change;

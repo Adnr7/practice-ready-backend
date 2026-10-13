@@ -559,7 +559,7 @@ function ActiveReservationCard({
 
 - [ ] **Step 6: Pass the reservation into HomeScreen**
 
-In the `<HomeScreen ... />` usage (lines 3249-3272), add these props before `conflict={demoConflict}`:
+In the `<HomeScreen ... />` usage, add these props:
 
 ```tsx
         activeReservation={activeReservation}
@@ -574,17 +574,13 @@ In `HomeScreen` (line 4799), extend the parameter destructuring and its type. Ch
 ```tsx
 function HomeScreen({
   onBook,
-  onConflict,
   onEquipment,
   onSchedule,
-  conflict,
   greeting,
 }: {
   onBook: () => void;
-  onConflict: () => void;
   onEquipment: () => void;
   onSchedule: () => void;
-  conflict: boolean;
   greeting: string;
 }) {
 ```
@@ -594,20 +590,16 @@ to:
 ```tsx
 function HomeScreen({
   onBook,
-  onConflict,
   onEquipment,
   onSchedule,
-  conflict,
   greeting,
   activeReservation,
   reservationPhase,
   reservationNowMs,
 }: {
   onBook: () => void;
-  onConflict: () => void;
   onEquipment: () => void;
   onSchedule: () => void;
-  conflict: boolean;
   greeting: string;
   activeReservation: ActiveReservation | null;
   reservationPhase: BookingPhase;
