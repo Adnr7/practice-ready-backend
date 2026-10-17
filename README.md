@@ -96,13 +96,15 @@ the seed process.
 
 ### Initialize an empty local database
 
-The current SQL lives under `drizzle/`, but root Wrangler configuration does not yet set `migrations_dir`. For a **new, empty local database**, apply the checked-in initial schema explicitly:
+The current SQL lives under `drizzle/`, but root Wrangler configuration does not yet set `migrations_dir`. For a **new, empty local database**, apply the checked-in migrations explicitly, in order:
 
 ```bash
-corepack pnpm exec wrangler d1 execute practice_ready_db --local --persist-to .wrangler/state --file drizzle/0000_lush_misty_knight.sql
+for migration in drizzle/0000_lush_misty_knight.sql drizzle/0001_new_the_hood.sql drizzle/0002_rich_korath.sql; do
+  corepack pnpm exec wrangler d1 execute practice_ready_db --local --persist-to .wrangler/state --file "$migration"
+done
 ```
 
-This bootstrap command is not idempotent: skip it if these tables already exist. It also does not populate Wrangler's migration ledger. P0 of the implementation plan establishes the tracked migration workflow for subsequent schema changes. Do not use `db:generate` as a substitute for applying an existing migration.
+These bootstrap commands are not idempotent: skip them if these tables already exist. They also do not populate Wrangler's migration ledger. Do not use `db:generate` as a substitute for applying an existing migration.
 
 Start the built application against the local Worker/D1 state:
 
@@ -185,6 +187,10 @@ This table describes **current code**, not the proposed final contract. Response
 | GET | `/api/equipment?query=&type=&locationId=&status=` | Public inventory search/filter |
 | GET | `/api/equipment/room/:roomId` | Default room equipment grouped by readiness |
 | PATCH | `/api/equipment/:id` | Technician/admin condition/location update |
+| POST | `/api/equipment/:id/movements` | Authenticated user records a move and atomically updates the current location |
+| GET | `/api/movements?mine=true` | Authenticated user's persistent movement history; staff may request all movements with `mine=false` |
+| POST | `/api/movements/:id/return` | Owner or staff records a return to the original location and creates a return event |
+| PATCH | `/api/movements/:id` | Technician/admin corrects the current location and creates a correction event |
 | GET | `/api/schedule?date=` | Public room schedule for the operational day, including booked display names |
 | POST | `/api/seed` | Controlled seed using an admin session or configured bearer token |
 | POST | `/api/reports` | Authenticated student/staff report or FTS assistance request; returns a report reference |
