@@ -43,6 +43,13 @@
       "when": 1792240300000,
       "tag": "0005_reservation_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792240400000,
+      "tag": "0006_room_readiness",
+      "breakpoints": true
     }
   ]
 }

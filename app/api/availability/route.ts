@@ -8,6 +8,7 @@ import {
   isValidCalendarDate,
   type TimePeriod,
 } from "@/lib/booking-engine";
+import { bookingInstant } from "@/lib/room-readiness";
 
 export async function GET(request: Request) {
   try {
@@ -49,6 +50,10 @@ export async function GET(request: Request) {
     if (!room) {
       return Response.json({ error: "Room not found." }, { status: 404 });
     }
+
+    const roomState = await db.$client.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: string }>();
+    const closures = await db.$client.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM room_closures WHERE room_id = ? AND is_active = 1").bind(roomId).all<{ startsAt: string; endsAt: string }>();
+    const roomClosed = roomState?.readinessState === "closed";
 
     const now = getInstitutionNow();
     const isPastDate = dateParam < now.date;
@@ -143,10 +148,13 @@ export async function GET(request: Request) {
     const responseSlots = slots.map((slot) => {
       const passed =
         isPastDate || (isToday && isStartInPast(dateParam, slot.startTime, now));
+      const slotStart = bookingInstant(dateParam, slot.startTime);
+      const slotEnd = bookingInstant(dateParam, slot.endTime);
+      const closed = roomClosed || closures.results.some((closure) => Date.parse(closure.startsAt) < slotEnd && Date.parse(closure.endsAt) > slotStart);
       return {
         ...slot,
         status:
-          passed && slot.status === "available" ? ("booked" as const) : slot.status,
+          closed && slot.status === "available" ? ("maintenance" as const) : passed && slot.status === "available" ? ("booked" as const) : slot.status,
         passed,
         bookedBy: slot.status === "booked" ? (bookedByBySlotId.get(slot.id) ?? null) : null,
       };

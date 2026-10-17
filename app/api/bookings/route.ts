@@ -12,6 +12,7 @@ import {
   validateBookingRequest,
   deriveBookingPhase,
 } from "@/lib/booking-engine";
+import { roomIsClosedForWindow } from "@/lib/room-readiness";
 
 export async function GET(request: Request) {
   try {
@@ -149,6 +150,10 @@ export async function POST(request: Request) {
 
     if (!room) {
       return Response.json({ error: "Selected room does not exist or is inactive." }, { status: 404 });
+    }
+
+    if (await roomIsClosedForWindow(db.$client, roomId, date, startTime, endTime)) {
+      return Response.json({ error: "This room is closed or unavailable during the requested time.", code: "ROOM_CLOSED" }, { status: 409 });
     }
 
     // Identify user or fallback to guest for evaluation demo

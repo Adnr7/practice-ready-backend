@@ -19,6 +19,11 @@ export const rooms = sqliteTable("rooms", {
   capacity: integer("capacity").notNull(),
   description: text("description").notNull(),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  locationId: integer("location_id"),
+  readinessState: text("readiness_state", { enum: ["usable", "restricted", "closed", "unknown"] }).notNull().default("unknown"),
+  readinessNotes: text("readiness_notes"),
+  readinessVerifiedAt: text("readiness_verified_at"),
+  readinessVerifiedByUserId: integer("readiness_verified_by_user_id").references(() => users.id),
 });
 
 export const locations = sqliteTable("locations", {
@@ -167,6 +172,110 @@ export const sessionEquipmentUsage = sqliteTable("session_equipment_usage", {
 }, (table) => [
   uniqueIndex("idx_session_equipment_usage_unique").on(table.bookingId, table.equipmentId),
   index("idx_session_equipment_usage_booking").on(table.bookingId, table.createdAt),
+]);
+
+export const roomRestrictions = sqliteTable("room_restrictions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: integer("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
+  activityKey: text("activity_key").notNull(),
+  state: text("state", { enum: ["allowed", "restricted", "unsupported", "unknown"] }).notNull(),
+  explanation: text("explanation").notNull(),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdByUserId: integer("created_by_user_id").references(() => users.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_room_restrictions_room").on(table.roomId, table.activityKey, table.isActive),
+]);
+
+export const roomClosures = sqliteTable("room_closures", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: integer("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
+  startsAt: text("starts_at").notNull(),
+  endsAt: text("ends_at").notNull(),
+  reason: text("reason").notNull(),
+  sourceReportId: integer("source_report_id"),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => users.id),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  cancelledAt: text("cancelled_at"),
+}, (table) => [
+  index("idx_room_closures_room_window").on(table.roomId, table.startsAt, table.endsAt, table.isActive),
+]);
+
+export const equipmentInspections = sqliteTable("equipment_inspections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  equipmentId: integer("equipment_id").notNull().references(() => equipment.id),
+  inspectorUserId: integer("inspector_user_id").notNull().references(() => users.id),
+  result: text("result", { enum: ["passed", "failed"] }).notNull(),
+  condition: text("condition").notNull(),
+  notes: text("notes"),
+  observedAt: text("observed_at").notNull(),
+  repairJobId: integer("repair_job_id"),
+}, (table) => [
+  index("idx_equipment_inspections_equipment").on(table.equipmentId, table.observedAt),
+]);
+
+export const repairJobs = sqliteTable("repair_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  equipmentId: integer("equipment_id").notNull().references(() => equipment.id),
+  sourceReportId: integer("source_report_id"),
+  stage: text("stage", { enum: ["reported", "assessing", "awaiting_parts", "in_repair", "awaiting_inspection", "completed"] }).notNull().default("reported"),
+  expectedReturnAt: text("expected_return_at"),
+  openedByUserId: integer("opened_by_user_id").notNull().references(() => users.id),
+  openedAt: text("opened_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  completedAt: text("completed_at"),
+  completedByUserId: integer("completed_by_user_id").references(() => users.id),
+  completionInspectionId: integer("completion_inspection_id"),
+}, (table) => [
+  index("idx_repair_jobs_equipment_stage").on(table.equipmentId, table.stage),
+]);
+
+export const repairUpdates = sqliteTable("repair_updates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  repairJobId: integer("repair_job_id").notNull().references(() => repairJobs.id, { onDelete: "cascade" }),
+  stage: text("stage", { enum: ["reported", "assessing", "awaiting_parts", "in_repair", "awaiting_inspection", "completed"] }).notNull(),
+  expectedReturnAt: text("expected_return_at"),
+  publicMessage: text("public_message"),
+  privateNote: text("private_note"),
+  actorUserId: integer("actor_user_id").notNull().references(() => users.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_repair_updates_job_created").on(table.repairJobId, table.createdAt),
+]);
+
+export const practiceProfiles = sqliteTable("practice_profiles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  category: text("category", { enum: ["vocal", "band", "instrument"] }).notNull(),
+  description: text("description").notNull(),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  version: integer("version").notNull().default(1),
+});
+
+export const practiceRequirements = sqliteTable("practice_requirements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  profileId: integer("profile_id").notNull().references(() => practiceProfiles.id, { onDelete: "cascade" }),
+  requirementKey: text("requirement_key").notNull(),
+  label: text("label").notNull(),
+  equipmentType: text("equipment_type"),
+  equipmentNamePattern: text("equipment_name_pattern"),
+  quantity: integer("quantity").notNull().default(1),
+  isHard: integer("is_hard", { mode: "boolean" }).notNull().default(true),
+  studentSupplied: integer("student_supplied", { mode: "boolean" }).notNull().default(false),
+});
+
+export const roomPracticeTypes = sqliteTable("room_practice_types", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: integer("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => practiceProfiles.id, { onDelete: "cascade" }),
+  state: text("state", { enum: ["supported", "restricted", "unsupported", "unknown"] }).notNull(),
+  explanation: text("explanation").notNull(),
+  updatedByUserId: integer("updated_by_user_id").references(() => users.id),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_room_practice_types_unique").on(table.roomId, table.profileId),
 ]);
 
 

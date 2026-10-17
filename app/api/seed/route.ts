@@ -36,6 +36,15 @@ export async function POST(request: Request) {
     const existingSlots = await db.select().from(timeSlots).limit(1);
 
     if (existingRooms.length > 0 && existingSlots.length > 0 && !force) {
+      // Readiness migrations add the room/location relation after older seed
+      // data may already exist. Keep this repair idempotent even when the
+      // legacy early-return path is used.
+      for (const rm of SEED_ROOMS) {
+        await db.$client.prepare(`
+          UPDATE rooms SET location_id = (SELECT id FROM locations WHERE code = ? LIMIT 1)
+          WHERE code = ? AND location_id IS NULL
+        `).bind(rm.code, rm.code).run();
+      }
       return Response.json({
         message: "Database already seeded. Pass ?force=true to re-seed or update.",
       });
@@ -83,6 +92,7 @@ export async function POST(request: Request) {
 
       if (existing) {
         roomMap.set(rm.code, existing.id);
+        await db.$client.prepare("UPDATE rooms SET location_id = COALESCE(location_id, ?) WHERE id = ?").bind(locationMap.get(rm.code) ?? null, existing.id).run();
       } else {
         const [inserted] = await db
           .insert(rooms)
@@ -92,6 +102,7 @@ export async function POST(request: Request) {
             capacity: rm.capacity,
             description: rm.description,
             isActive: true,
+            locationId: locationMap.get(rm.code) ?? null,
           })
           .returning();
         roomMap.set(rm.code, inserted.id);
