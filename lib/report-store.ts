@@ -153,6 +153,12 @@ export async function listReports(
   return result.results.map((row) => withUpdates(row, []));
 }
 
+export async function listAllReports(db: ReportDatabase): Promise<ReportRecord[]> {
+  const result = await db.prepare(reportQuery()).all<ReportRow>();
+  const reports = result.results.map((row) => withUpdates(row, []));
+  return Promise.all(reports.map(async (report) => ({ ...report, updates: await getUpdates(db, report.id) })));
+}
+
 export async function getReport(
   db: ReportDatabase,
   reportId: number,

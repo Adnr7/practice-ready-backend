@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       status: 201,
       headers: {
         "Content-Type": "application/json",
-        "Set-Cookie": createSessionCookie(token),
+        "Set-Cookie": createSessionCookie(token, new URL(request.url).protocol === "https:"),
       },
     });
   } catch (error) {

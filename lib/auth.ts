@@ -217,12 +217,12 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
   return cookies;
 }
 
-export function createSessionCookie(token: string): string {
-  return `pr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
+export function createSessionCookie(token: string, secure = false): string {
+  return `pr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=86400`;
 }
 
-export function createClearSessionCookie(): string {
-  return `pr_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function createClearSessionCookie(secure = false): string {
+  return `pr_session=; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=0`;
 }
 
 export async function getSessionFromRequest(request: Request): Promise<SessionPayload | null> {

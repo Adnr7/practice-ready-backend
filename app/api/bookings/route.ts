@@ -158,11 +158,12 @@ export async function POST(request: Request) {
 
     // Identify user or fallback to guest for evaluation demo
     const session = await getSessionFromRequest(request);
-    const userId = session?.userId ?? null;
-    const guestStudentName = userId
-      ? null
-      : (body.guestName ?? "").trim().slice(0, 120) || "Student Practice User";
-    const guestStudentId = userId ? null : (body.guestStudentId?.trim() || "TSM-2026-GUEST");
+    if (!session) {
+      return Response.json({ error: "Sign in is required for operational room reservations." }, { status: 401 });
+    }
+    const userId = session.userId;
+    const guestStudentName = null;
+    const guestStudentId = null;
 
     // Fill missing rows without appending another copy of an old grid when a
     // legacy database has not received the unique index migration yet.

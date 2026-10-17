@@ -527,3 +527,111 @@ export async function submitSessionEquipmentUsage(
     return { success: false, error: "Could not reach the session service." };
   }
 }
+
+export interface ReportData {
+  id: number;
+  reference: string;
+  category: "equipment" | "room" | "assistance";
+  equipmentId: number | null;
+  equipmentName: string | null;
+  roomId: number | null;
+  roomName: string | null;
+  locationId: number | null;
+  locationName: string | null;
+  bookingId: number | null;
+  issueType: string | null;
+  description: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+  updates: Array<{ id: number; authorName: string | null; status: string | null; message: string | null; createdAt: string }>;
+}
+
+export async function fetchReports(all = false): Promise<ReportData[] | null> {
+  try {
+    const res = await fetch(`/api/reports${all ? "?mine=false" : ""}`, { cache: "no-store", credentials: "include" });
+    if (!res.ok) return null;
+    const data = await readJson<{ reports?: ReportData[] }>(res);
+    return data?.reports ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateReport(id: number, payload: { status?: string; message?: string }): Promise<{ success: boolean; report?: ReportData; error?: string }> {
+  try {
+    const res = await fetch(`/api/reports/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(payload) });
+    const data = await readJson<{ report?: ReportData; error?: string }>(res);
+    return res.ok ? { success: true, report: data?.report } : { success: false, error: data?.error ?? "Could not update the report." };
+  } catch {
+    return { success: false, error: "Could not reach the support service." };
+  }
+}
+
+export async function createReport(payload: {
+  category: "equipment" | "room" | "assistance";
+  equipmentId?: number;
+  roomId?: number;
+  locationId?: number;
+  bookingId?: number;
+  issueType?: string;
+  description: string;
+}): Promise<{ success: boolean; report?: ReportData; error?: string }> {
+  try {
+    const res = await fetch("/api/reports", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(payload) });
+    const data = await readJson<{ report?: ReportData; error?: string }>(res);
+    return res.ok ? { success: true, report: data?.report } : { success: false, error: data?.error ?? "Could not submit the report." };
+  } catch {
+    return { success: false, error: "Could not reach the support service." };
+  }
+}
+
+export interface MovementData {
+  id: number;
+  equipmentId: number;
+  equipmentCode: string;
+  equipmentName: string;
+  equipmentCurrentLocationId: number;
+  fromLocationId: number;
+  fromLocationName: string;
+  toLocationId: number;
+  toLocationName: string;
+  status: "open" | "returned" | "corrected";
+  expectedReturnAt: string | null;
+  movedAt: string;
+  returnedAt: string | null;
+  returnLocationId: number | null;
+  notes: string | null;
+}
+
+export async function fetchMovements(mine = true): Promise<MovementData[] | null> {
+  try {
+    const res = await fetch(`/api/movements?mine=${mine ? "true" : "false"}`, { cache: "no-store", credentials: "include" });
+    if (!res.ok) return null;
+    const data = await readJson<{ movements?: MovementData[] }>(res);
+    return data?.movements ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function createEquipmentMovement(payload: { equipmentId: number; toLocationId: number; bookingId?: number; expectedReturnAt?: string | null; notes?: string }): Promise<{ success: boolean; movement?: MovementData; error?: string }> {
+  try {
+    const res = await fetch(`/api/equipment/${payload.equipmentId}/movements`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ toLocationId: payload.toLocationId, bookingId: payload.bookingId, expectedReturnAt: payload.expectedReturnAt, notes: payload.notes }) });
+    const data = await readJson<{ movement?: MovementData; error?: string }>(res);
+    return res.ok ? { success: true, movement: data?.movement } : { success: false, error: data?.error ?? "Could not record the movement." };
+  } catch {
+    return { success: false, error: "Could not reach the equipment service." };
+  }
+}
+
+export async function returnEquipmentMovement(id: number, notes?: string): Promise<{ success: boolean; movement?: MovementData; error?: string }> {
+  try {
+    const res = await fetch(`/api/movements/${id}/return`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ notes }) });
+    const data = await readJson<{ movement?: MovementData; error?: string }>(res);
+    return res.ok ? { success: true, movement: data?.movement } : { success: false, error: data?.error ?? "Could not record the return." };
+  } catch {
+    return { success: false, error: "Could not reach the equipment service." };
+  }
+}

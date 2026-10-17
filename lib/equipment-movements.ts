@@ -50,6 +50,7 @@ export interface CreateMovementInput {
   fromLocationId?: number;
   expectedReturnAt?: string | null;
   notes?: string | null;
+  bookingId?: number;
 }
 
 export interface ReturnMovementInput {
@@ -667,6 +668,7 @@ export function parseCreateMovementBody(body: unknown): Omit<CreateMovementInput
     fromLocationId: parseOptionalLocationId(value.fromLocationId, "fromLocationId"),
     expectedReturnAt: parseExpectedReturnAt(value.expectedReturnAt),
     notes: parseNotes(value.notes),
+    bookingId: parseOptionalLocationId(value.bookingId, "bookingId"),
   };
 }
 

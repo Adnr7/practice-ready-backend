@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getDb } from "@/db";
 import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
-import { createReport, generateReportReference, listReports, type ReportDatabase } from "@/lib/report-store";
+import { createReport, generateReportReference, listAllReports, listReports, type ReportDatabase } from "@/lib/report-store";
 import { createReportSchema } from "@/lib/report-validation";
 
 function authRequired() {
@@ -87,7 +87,11 @@ export async function GET(request: Request) {
     if (!session) return authRequired();
 
     const db = getDb().$client;
-    const reports = await listReports(db, session.userId);
+    const all = new URL(request.url).searchParams.get("mine") === "false";
+    if (all && session.role !== "technician" && session.role !== "admin") {
+      return Response.json({ error: "Only FTS technicians and administrators can list the report queue." }, { status: 403 });
+    }
+    const reports = all ? await listAllReports(db) : await listReports(db, session.userId);
     return Response.json({ reports });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";

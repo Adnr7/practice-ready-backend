@@ -44,6 +44,7 @@ import {
 } from "@/lib/api-client";
 import { isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
+import { LiveMovements, LiveReservations, LiveSupport } from "@/components/live-workflows";
 
 
 const PRACTICE_READY_MUSIC_SRC = "/practice-ready-smooth-jazz.mp3";
@@ -302,6 +303,9 @@ function MusicToggle({ inline = false }: { inline?: boolean }) {
 
 type Screen =
   | "home"
+  | "reservations"
+  | "support"
+  | "movements"
   | "date"
   | "mpr"
   | "period"
@@ -2874,7 +2878,7 @@ function BookingAccountPanel({
         </form>
         {error && <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>}
         <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-[#9AA6BC]">
-          Anonymous reservations remain available through the existing backend flow.
+          Sign in before confirming an operational reservation. Demo-only presentation is available with <code>?demo=1</code>.
         </p>
       </div>
     </details>
@@ -3714,12 +3718,18 @@ export default function Home() {
           go("directory-search");
         }}
         onSchedule={() => go("schedule")}
+        onReservations={() => go("reservations")}
+        onSupport={() => go("support")}
+        onMovements={() => go("movements")}
         greeting={greeting}
         activeReservation={visibleActiveReservation}
         reservationPhase={reservationPhase}
         reservationNowMs={reservationNowMs}
       />
     );
+  if (screen === "reservations") return <LiveReservations user={currentUser} onBack={back} />;
+  if (screen === "support") return <LiveSupport user={currentUser} onBack={back} />;
+  if (screen === "movements") return <LiveMovements user={currentUser} onBack={back} />;
   if (screen === "schedule")
     return (
       <ScheduleScreen back={back} />
@@ -5408,6 +5418,9 @@ function HomeScreen({
   onBook,
   onEquipment,
   onSchedule,
+  onReservations,
+  onSupport,
+  onMovements,
   greeting,
   activeReservation,
   reservationPhase,
@@ -5416,6 +5429,9 @@ function HomeScreen({
   onBook: () => void;
   onEquipment: () => void;
   onSchedule: () => void;
+  onReservations: () => void;
+  onSupport: () => void;
+  onMovements: () => void;
   greeting: string;
   activeReservation: ActiveReservation | null;
   reservationPhase: BookingPhase;
@@ -5631,6 +5647,24 @@ function HomeScreen({
                 title="Room Schedule"
                 text="See who is booked in each MPR today."
                 onClick={onSchedule}
+              />
+              <HomeCard
+                icon={<CalendarDays />}
+                title="My Reservations"
+                text="Manage upcoming, active, and past sessions."
+                onClick={onReservations}
+              />
+              <HomeCard
+                icon={<TriangleAlert />}
+                title="Reports & Support"
+                text="Report an issue or contact FTS."
+                onClick={onSupport}
+              />
+              <HomeCard
+                icon={<MapPin />}
+                title="Equipment Movements"
+                text="Record actual moves and returns."
+                onClick={onMovements}
               />
             </div>
           </div>
