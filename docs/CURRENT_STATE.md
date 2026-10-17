@@ -26,7 +26,7 @@ The backend branch adds these useful foundations to the prototype. A route's exi
 |---|---|---|
 | F01 Availability | Partial: room and availability APIs are now read by the booking UI, including live booked names | Remove remaining demo occupancy fallback; enforce closures and policy horizon; add browser coverage |
 | F02 Reserve | Partial: UI resolves live room IDs and only confirms committed D1 results; atomic store is tested | Add idempotency and browser coverage; operational booking now requires sign-in |
-| F03 Reschedule | Implemented locally: version-aware atomic reschedule preserves the original on conflict, records history, and is exposed through live My Reservations | Browser coverage and staff override UX remain |
+| F03 Reschedule | Implemented locally: version-aware atomic reschedule preserves the original on conflict, records history, and is exposed at `PATCH /api/bookings/:id/reschedule` plus the compatibility PATCH form | Browser coverage and staff override UX remain |
 | F04 Cancel | Implemented locally: ownership/cutoff, version-aware release, idempotent repeat, history, and live UI | Browser coverage and staff override UX remain |
 | F05 Session equipment use | Implemented locally: persistent usage table, active-owner-only receipt, deduplication/eligibility, end-session route, and live UI | Browser coverage and policy-approved incoming relocation rules remain |
 | F06 Setups and locations | Partial: directory and room setup screens now read live equipment APIs | Remove remaining fixture-only alternative flows; add staff catalog operations and search parity |
