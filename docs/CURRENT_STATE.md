@@ -24,44 +24,43 @@ The backend branch adds these useful foundations to the prototype. A route's exi
 
 | Feature | Observed implementation | Remaining work |
 |---|---|---|
-| F01 Availability | Partial: API exists; UI uses generated labels and fixed booked-slot sets | Connect live reads; fix calendar/time contract; enforce closures and horizon |
-| F02 Reserve | Partial: UI calls `submitBooking`; route inserts bookings and slot links | Correct payload/room IDs, remove false success, enforce auth and atomic claims |
+| F01 Availability | Partial: room and availability APIs are now read by the booking UI, including live booked names | Remove remaining demo occupancy fallback; enforce closures and policy horizon; add browser coverage |
+| F02 Reserve | Partial: UI resolves live room IDs and only confirms committed D1 results; atomic store is tested | Require authenticated live bookings, add idempotency and browser coverage |
 | F03 Reschedule | No reschedule route or management journey found | Atomic reschedule and owner UI |
-| F04 Cancel | Partial: `DELETE /api/bookings/[id]` | Ownership, cutoff, transactional release and UI |
+| F04 Cancel | Partial: `DELETE /api/bookings/[id]` has ownership/cutoff and transactional release | Connect a reservations UI and add versioned/idempotent lifecycle behavior |
 | F05 Session equipment use | No usage table/API/journey found | Active-session logging and receipt |
-| F06 Setups and locations | Partial: rich fixture UI; equipment APIs and fields | One live catalog; default-vs-present semantics; stable IDs and search parity |
-| F07 Condition | Partial: condition/status fields and staff PATCH | Normalize condition, inspect/update workflow, live UI and freshness |
+| F06 Setups and locations | Partial: directory and room setup screens now read live equipment APIs | Remove remaining fixture-only alternative flows; add staff catalog operations and search parity |
+| F07 Condition | Partial: live equipment reads and staff PATCH exist | Normalize independent condition/location facts, add inspection/freshness workflow and staff UI |
 | F08 Repair progress/ETA | “service” state exists; no repair record | Repair lifecycle, dates and staff workflow |
 | F09 Vocal suitability | No explicit live matching workflow found | Configurable acoustic/amplified requirements and explained results |
 | F10 Band suitability | No explicit live matching workflow found | Capacity, instrumentation and restrictions |
 | F11 Instrument suitability | No explicit live matching workflow found | Instrument-specific requirements and results |
-| F12 Equipment reports | No report table/API/journey found | Submission, own status view and FTS triage |
-| F13 Room reports | No report table/API/journey found | Room concerns and links to maintenance/closure |
+| F12 Equipment reports | Partial: persistent report tables and authenticated create/list/detail/staff-update APIs exist | Connect the student report UI and FTS queue; add attachments only if approved |
+| F13 Room reports | Partial: persistent room-report API path exists | Connect room report UI and link staff resolution to room restrictions/closures |
 | F14 Room conditions | Partial: descriptions and `isActive` | Structured condition, restriction and closure data/UI |
 | F15 Rules | Partial: slot/maximum-duration rules in code and UI | Versioned published policy and consistent enforcement |
-| F16 Contact FTS | No persisted support-request flow found | Verified contacts, assistance form and staff queue |
-| F17 Relocation | Partial: staff PATCH can replace location | Movement history, expected return, authorized move/return workflow and atomicity |
+| F16 Contact FTS | Partial: assistance reports persist through the reports API | Connect Contact FTS and My Requests UI with verified contact content and staff queue |
+| F17 Relocation | Partial: persistent movement/create, list, return and staff-correction APIs now exist | Connect the movement UI; enforce policy-designated assets/destinations and add browser coverage |
 
 ## 3. Highest-priority findings
 
 | Finding | Evidence in repository | Implementation consequence |
 |---|---|---|
-| **Booking can display success after failure** | `app/page.tsx`, `confirm()`: a timer shows success after 1.8 seconds; responses other than a nonempty conflict list also show success | Remove fallback success before live use. Only committed results can confirm. |
-| **Read paths remain demo-based** | `app/page.tsx` imports only `submitBooking` from `lib/api-client.ts`; equipment arrays and booked-slot sets remain local | Replace the data source, including readiness and directory views, rather than adding more isolated endpoints. |
-| **Room identity can be wrong** | UI derives numeric ID from a room label. Seed insertion omits the `id` values in `SEED_ROOMS`, allowing auto-increment IDs | A fresh DB can give MPR 2 ID 1 while the UI sends 2. Use IDs returned by the API and stable codes for imports. |
+| **Booking can display success after failure** | The current client checks for a committed booking reference before showing success | Keep this regression covered and add browser failure tests. |
+| **Some read paths remain demo-based** | Live room/availability/equipment reads now exist, but alternative searches and some setup presentation still use fixture arrays | Replace the remaining operational fixture paths rather than adding isolated endpoints. |
+| **Room identity can be wrong in legacy UI paths** | The booking flow resolves IDs from `/api/rooms`; seed maps stable codes to generated IDs | Use returned IDs and stable codes everywhere, including future staff imports. |
 | **UI time labels are not API times** | `halfHourSlot()` creates strings such as `9:00–9:30 AM`; `confirm()` passes selected labels as `startTime` and through `timeToMinutes()` | Use structured slots with machine instants/IDs and separate display labels. |
 | **Schedule/date mismatch** | UI covers 06:00–next-day-06:00, with different period boundaries; backend generates 06:00–00:00. UI uses `toISOString().split("T")[0]` | Define campus time and actual opening hours once. Fix date conversion and final-midnight-slot handling. |
-| **Booking writes are not atomic** | `app/api/bookings/route.ts`: availability read, booking insert, link insert and status update are separate awaited writes | Two callers can both pass the read. Add database-enforced unique claims and one atomic write operation. |
+| **Booking lifecycle is incomplete** | Creation uses the D1 batch-backed booking store, but idempotency, reschedule and student reservation management are absent | Add idempotency/version guards and complete the reservation lifecycle. |
 | **Slot generation can duplicate** | Both availability and booking routes create slots when none are found; `time_slots` has only nonunique room/date/start indexes | Introduce slot identity uniqueness and idempotent generation. |
-| **Registration can self-assign staff/admin** | `app/api/auth/register/route.ts` accepts `body.role` | Public registration must always create students; role management is administrative. |
-| **Session defaults are unsuitable for live accounts** | `lib/auth.ts`: hardcoded secret fallback, cookies without `Secure`, signed role claims without a revocation lookup | Require configured secrets, secure production cookies and revocable sessions/current-account checks. |
-| **Unauthenticated seed and guest cancellation** | Seed has no auth check and creates known demo accounts; cancellation permits any booking without a `userId` | Move seed to controlled tooling; isolate demo data and require ownership for live mutations. |
-| **Cancellation has multiple writes and no time cutoff** | Cancellation updates slot status, then booking status; booking-slot links remain | Separate active claims from historical links and transact the lifecycle change. |
+| **Session lifecycle is still limited** | Registration is student-only and auth fails closed, but sessions are signed cookies without a revocation table | Add revocable server sessions, secure production-cookie behavior and current-account checks. |
+| **Guest booking remains enabled** | The prototype can still submit `guestName` when no session exists | Isolate demo/guest data and require authentication for operational bookings. |
+| **Cancellation lifecycle is partial** | Cancellation now uses a batch-backed release and cutoff | Add idempotency, version guards, history semantics and the reservations UI. |
 | **Validation and rules are incomplete** | Booking engine checks date/time shapes but not real dates, past starts, horizon or bounded clock values | Add strict shared schemas and policy-aware server validation. |
 | **Equipment fields conflate different facts** | One `status` mixes location (`away`), condition (`attention`/`service`) and missing state; PATCH changes inspection time for any update | Separate condition, location, maintenance and verification; record movements distinctly. |
 | **Search/data can regress during integration** | UI has alias/prefix/type ranking; API uses SQL `LIKE`; seed catalog differs from UI catalog | Extract shared search semantics and reconcile fixtures with a verified operational catalog. |
 
-Other important gaps: no real database concurrency test, no route-level authorization suite, no staff operations UI, no booking idempotency, no room-policy/repair/report/movement audit model, and a short random booking-reference space without collision retry.
+Other important gaps: no full route-level authorization suite, no staff operations UI, no booking idempotency, no room-policy/repair/audit model, no end-to-end report/movement UI integration, and a short random booking-reference space despite collision retry.
 
 ## 4. Configuration and onboarding gaps
 
@@ -77,12 +76,12 @@ Other important gaps: no real database concurrency test, no route-level authoriz
 
 | Check | Result / interpretation |
 |---|---|
-| `npm test` on Node 22.22.0 | **13 passed, 0 failed**. Covers crypto/session utilities, slot calculations and a sequential conflict simulation. |
-| `tests/concurrency-conflict.test.mjs` review | Mutates arrays sequentially; no Worker requests or database writes. Passing it does not establish atomicity. |
+| `corepack pnpm test` on Node 22.22.0 | **54 passed, 0 failed** after the reports, movement and live-client slices. Covers auth/API clients, slot calculations, D1 booking concurrency, D1 movement persistence and report persistence. |
+| `tests/concurrency-conflict.test.mjs` review | Still includes a sequential simulator, but `tests/booking-store.test.mjs` exercises D1-backed atomic booking behavior. Full route/browser concurrency remains open. |
 | Frozen install / typecheck / build | Passed with pnpm 11.25.0; build reported a large client-chunk warning. |
-| `corepack pnpm lint` | **20 errors and 22 warnings** in the existing baseline, including explicit `any` and effect-state issues. |
+| `corepack pnpm lint` | Passed with **0 errors and 4 warnings**, all existing `no-img-element` warnings in `app/page.tsx`. |
 | Local schema / built Worker / seed / room reads | Passed using the [README](../README.md) commands. Seed produced 5 rooms, 8 locations, 32 assets and 2,520 slots. Room output confirmed MPR 2 has ID 1 on a fresh database. |
-| Browser journeys / concurrent API writes | Not exercised by the baseline checks; required in P1/P2. |
+| Browser journeys / route-level API calls / remote D1 | Not exercised by these checks; required before calling the full frontend backend-complete. |
 | Production database / institution data | Not accessed or verified in this review. |
 
 ## 6. Recommended order
