@@ -29,10 +29,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchAvailability,
   fetchBookingStatus,
+  fetchCurrentUser,
+  fetchEquipmentInventory,
+  fetchRoomEquipment,
   fetchSchedule,
+  login,
+  logout,
+  register,
   resolveRoomId,
   submitBooking,
+  type EquipmentItem,
   type ScheduleResponse,
+  type UserProfile,
 } from "@/lib/api-client";
 import { isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
@@ -331,6 +339,37 @@ type Equipment = {
   condition: string;
   status: "ready" | "away" | "attention" | "service" | "missing";
 };
+
+type EquipmentLoadStatus = "idle" | "loading" | "loaded" | "error";
+
+type RoomEquipmentViewState = {
+  status: EquipmentLoadStatus;
+  items: Equipment[];
+  error?: string;
+};
+
+const equipmentFromApi = (item: EquipmentItem): Equipment => ({
+  id: item.equipmentId,
+  name: item.name,
+  modelName: item.modelName ?? undefined,
+  defaultLocation: item.defaultLocationName ?? undefined,
+  currentLocation: item.currentLocationName ?? item.defaultLocationName ?? "Unknown",
+  condition: item.condition,
+  status: item.status,
+});
+
+const isExplicitDemoPresentation = () => {
+  if (typeof window === "undefined") return false;
+  return (
+    new URLSearchParams(window.location.search).get("demo") === "1" ||
+    (typeof process !== "undefined" &&
+      process.env.NEXT_PUBLIC_DEMO_PRESENTATION === "true")
+  );
+};
+
+const subscribeDemoPresentation = () => () => {};
+const getDemoPresentationSnapshot = () => isExplicitDemoPresentation();
+const getDemoPresentationServerSnapshot = () => false;
 
 const drumPartDefinitions = [
   ["KICK", "Kick drum"],
@@ -1243,6 +1282,15 @@ const directoryEquipment: Equipment[] = Array.from(
     ].map((item) => [item.id, item]),
   ).values(),
 );
+
+const fixtureEquipmentForRoom = (roomName: string): Equipment[] => {
+  if (roomName === "MPR 2") return mpr2;
+  if (roomName === "MPR 4") return mpr4;
+  if (roomName === "MPR 5") return mpr5;
+  return mpr3;
+};
+
+const emptyEquipment: Equipment[] = [];
 
 const normalizeEquipmentSearch = (value: string) =>
   value
@@ -2676,11 +2724,177 @@ function EquipmentRow({
   );
 }
 
+function EquipmentDataNotice({ status }: { status: EquipmentLoadStatus }) {
+  if (status === "loading") {
+    return (
+      <p role="status" className="rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-800 dark:border-violet-500/30 dark:bg-[#211A38] dark:text-violet-200">
+        Loading live equipment data…
+      </p>
+    );
+  }
+  if (status === "error") {
+    return (
+      <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-800 dark:bg-[#321820] dark:text-rose-200">
+        Could not load live equipment data. Please try again later.
+      </div>
+    );
+  }
+  return null;
+}
+
+function BookingAccountPanel({
+  user,
+  onUserChange,
+}: {
+  user: UserProfile | null;
+  onUserChange: (user: UserProfile | null) => void;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPending(true);
+    setError("");
+    const result =
+      mode === "login"
+        ? await login({ email, password })
+        : await register({ email, password, fullName });
+    setPending(false);
+    if (!result.success || !result.user) {
+      setError(result.error ?? "Could not authenticate.");
+      return;
+    }
+    onUserChange(result.user);
+    setPassword("");
+  };
+
+  const signOut = async () => {
+    setPending(true);
+    setError("");
+    const result = await logout();
+    setPending(false);
+    if (!result.success) {
+      setError(result.error ?? "Could not sign out.");
+      return;
+    }
+    onUserChange(null);
+  };
+
+  if (user) {
+    return (
+      <div className="mt-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3.5 dark:border-emerald-700 dark:bg-[#10271F] sm:mt-5 sm:p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+              Signed in
+            </p>
+            <p className="mt-1 truncate font-semibold text-emerald-950 dark:text-emerald-100">
+              {user.fullName}
+            </p>
+            <p className="mt-0.5 truncate text-xs text-emerald-800 dark:text-emerald-200">
+              {user.email}
+            </p>
+            <p className="mt-2 text-xs leading-5 text-emerald-800 dark:text-emerald-200">
+              This reservation will be linked to your account.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void signOut()}
+            disabled={pending}
+            className="shrink-0 rounded-xl border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-600 dark:bg-[#153327] dark:text-emerald-200 dark:hover:bg-[#1A4030]"
+          >
+            Sign out
+          </Button>
+        </div>
+        {error && <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <details className="mt-3.5 rounded-2xl border border-slate-200 bg-white dark:border-[#30384D] dark:bg-[#1B2133] sm:mt-5">
+      <summary className="cursor-pointer px-3.5 py-3 text-sm font-semibold text-violet-700 dark:text-violet-200">
+        Sign in or create a student account
+      </summary>
+      <div className="border-t border-slate-100 px-3.5 pb-3.5 pt-3 dark:border-[#252C3E] sm:px-4 sm:pb-4">
+        <div className="mb-3 flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-[#202739]">
+          {(["login", "register"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setMode(value);
+                setError("");
+              }}
+              className={`min-h-9 flex-1 rounded-lg px-3 text-xs font-semibold capitalize ${mode === value ? "bg-white text-violet-700 shadow-sm dark:bg-[#30384D] dark:text-violet-200" : "text-slate-500 dark:text-[#9AA6BC]"}`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+        <form className="space-y-2.5" onSubmit={submit}>
+          {mode === "register" && (
+            <Input
+              value={fullName}
+              onChange={(event) => setFullName(event.target.value)}
+              placeholder="Full name"
+              aria-label="Full name"
+              autoComplete="name"
+              required
+            />
+          )}
+          <Input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="University email"
+            aria-label="University email"
+            autoComplete="email"
+            required
+          />
+          <Input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Password"
+            aria-label="Password"
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            required
+          />
+          <Button type="submit" disabled={pending} className="min-h-10 w-full rounded-xl bg-violet-600 text-sm font-semibold text-white hover:bg-violet-700">
+            {pending ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+          </Button>
+        </form>
+        {error && <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>}
+        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-[#9AA6BC]">
+          Anonymous reservations remain available through the existing backend flow.
+        </p>
+      </div>
+    </details>
+  );
+}
+
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("home");
   const [history, setHistory] = useState<Screen[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [studentName, setStudentName] = useState("");
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const demoPresentation = useSyncExternalStore(
+    subscribeDemoPresentation,
+    getDemoPresentationSnapshot,
+    getDemoPresentationServerSnapshot,
+  );
+  const [liveDirectoryEquipment, setLiveDirectoryEquipment] = useState<Equipment[] | null>(null);
+  const [directoryEquipmentStatus, setDirectoryEquipmentStatus] = useState<EquipmentLoadStatus>("idle");
+  const [liveRoomEquipment, setLiveRoomEquipment] = useState<Record<string, RoomEquipmentViewState>>({});
   const [liveSlotResult, setLiveSlotResult] = useState<{
     key: string;
     slots: Record<string, { booked: boolean; bookedBy?: string | null }> | null;
@@ -2738,6 +2952,109 @@ export default function Home() {
     document.body.style.overflowX = "clip";
 
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchCurrentUser().then((user) => {
+      if (cancelled) return;
+      setCurrentUser(user);
+      if (user) setStudentName((name) => name || user.fullName);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const directoryScreen = [
+      "directory-search",
+      "directory-browse",
+      "directory-results",
+      "mixer-search",
+      "stand-search",
+      "alternative-search",
+    ].includes(screen);
+    if (!directoryScreen || demoPresentation) return;
+
+    let cancelled = false;
+    const loadDirectoryEquipment = async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setDirectoryEquipmentStatus("loading");
+      const items = await fetchEquipmentInventory();
+      if (cancelled) return;
+      if (!items) {
+        setDirectoryEquipmentStatus("error");
+        return;
+      }
+      setLiveDirectoryEquipment(items.map(equipmentFromApi));
+      setDirectoryEquipmentStatus("loaded");
+    };
+    void loadDirectoryEquipment();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, demoPresentation]);
+
+  useEffect(() => {
+    const roomScreen = [
+      "setup2",
+      "setup3",
+      "setup4",
+      "setup5",
+      "issues3",
+      "issues5",
+      "available-equipment",
+    ].includes(screen);
+    if (!roomScreen || demoPresentation) return;
+
+    let cancelled = false;
+    const loadRoomEquipment = async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setLiveRoomEquipment((previous) => ({
+        ...previous,
+        [room]: { status: "loading", items: [] },
+      }));
+      try {
+        const roomId = await resolveRoomId(room);
+        const groups = await fetchRoomEquipment(roomId);
+        if (cancelled) return;
+        if (!groups) {
+          setLiveRoomEquipment((previous) => ({
+            ...previous,
+            [room]: {
+              status: "error",
+              items: [],
+              error: "Could not load room equipment.",
+            },
+          }));
+          return;
+        }
+        const items = [...groups.ready, ...groups.away, ...groups.attention].map(
+          equipmentFromApi,
+        );
+        setLiveRoomEquipment((previous) => ({
+          ...previous,
+          [room]: { status: "loaded", items },
+        }));
+      } catch {
+        if (cancelled) return;
+        setLiveRoomEquipment((previous) => ({
+          ...previous,
+          [room]: {
+            status: "error",
+            items: [],
+            error: "Could not load room equipment.",
+          },
+        }));
+      }
+    };
+    void loadRoomEquipment();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, room, demoPresentation]);
 
   const { phase: reservationPhase, nowMs: reservationNowMs } =
     useActiveReservation(activeReservation);
@@ -3044,16 +3361,24 @@ export default function Home() {
       ? minutesToTime(timeToMinutes(selectedSlots[selectedSlots.length - 1]) + 30)
       : minutesToTime(timeToMinutes(startTime) + 30);
 
+    let bookingUser: UserProfile | null = currentUser;
     resolveRoomId(room)
-      .then((roomId) =>
-        submitBooking({
+      .then(async (roomId) => {
+        bookingUser = currentUser ?? (await fetchCurrentUser());
+        if (bookingUser) {
+          setCurrentUser(bookingUser);
+          setStudentName(bookingUser.fullName);
+        }
+        return submitBooking({
           roomId,
           date: dateStr,
           startTime,
           endTime,
-          guestName: studentName.trim() || "Student Practice User",
-        }),
-      )
+          ...(bookingUser
+            ? {}
+            : { guestName: studentName.trim() || "Student Practice User" }),
+        });
+      })
       .then((res) => {
         if (!res.success && res.conflictingSlots && res.conflictingSlots.length > 0) {
           setConflictSlot(res.conflictingSlots[0]);
@@ -3072,7 +3397,10 @@ export default function Home() {
               startTime: booking.startTime,
               endTime: booking.endTime,
               status: booking.status,
-              bookedFor: booking.guestStudentName ?? (studentName.trim() || undefined),
+              bookedFor:
+                booking.guestStudentName ??
+                bookingUser?.fullName ??
+                (studentName.trim() || undefined),
             };
             setActiveReservation(reservation);
             try {
@@ -3085,7 +3413,11 @@ export default function Home() {
               // for this session via state.
             }
           }
-          setStudentName(booking?.guestStudentName || studentName.trim() || "Student Practice User");
+          setStudentName(
+            booking?.guestStudentName ??
+              bookingUser?.fullName ??
+              (studentName.trim() || "Student Practice User"),
+          );
           setScreen("success");
         }
       })
@@ -3098,21 +3430,14 @@ export default function Home() {
         setScreen("booking-error");
       });
   };
+  const directoryEquipmentForView = demoPresentation
+    ? directoryEquipment
+    : liveDirectoryEquipment ?? emptyEquipment;
   const availableForLocation = useMemo(() => {
-    const equipmentByLocation: Record<string, Equipment[]> = {
-      "MPR 2": mpr2,
-      "MPR 3": mpr3,
-      "MPR 4": mpr4,
-      "MPR 5": mpr5,
-      Auditorium: auditorium,
-      Studio: studio,
-      "Live Room": liveRoom,
-      "MP Lab 1": mpLab1,
-      "MP Lab 2": mpLab2,
-      "Store Room": storeRoom,
-    };
-    return equipmentByLocation[location] ?? [];
-  }, [location]);
+    return directoryEquipmentForView.filter(
+      (item) => item.currentLocation === location,
+    );
+  }, [directoryEquipmentForView, location]);
   const availableItemsForLocation = availableForLocation.filter(
     (item) => item.status === "ready",
   );
@@ -3306,7 +3631,7 @@ export default function Home() {
       normalized === "drum kit" ||
       normalized === "drum set";
 
-    const matches = directoryEquipment.filter((item) => {
+    const matches = directoryEquipmentForView.filter((item) => {
       // All directory searches now share the same prefix, shorthand, typo and
       // equipment+accessory combination matching used elsewhere in the app.
       // Existing broad drum/category handling is preserved by the shared tags
@@ -3373,7 +3698,7 @@ export default function Home() {
           a.name.localeCompare(b.name),
       );
     return { all: matches, available, unavailable };
-  }, [query]);
+  }, [directoryEquipmentForView, query]);
 
   if (screen === "home")
     return (
@@ -3697,6 +4022,27 @@ export default function Home() {
   }
 
   const bookingDate = bookingDateForSlots(selectedDate || new Date(), selectedSlots);
+  const roomEquipmentForView: RoomEquipmentViewState = demoPresentation
+    ? { status: "loaded", items: fixtureEquipmentForRoom(room) }
+    : liveRoomEquipment[room] ?? { status: "loading", items: [] };
+  const roomEquipmentData = roomEquipmentForView.items;
+
+  if (
+    ["setup2", "setup3", "setup4", "setup5", "issues3", "issues5", "available-equipment"].includes(screen) &&
+    !demoPresentation &&
+    roomEquipmentForView.status !== "loaded"
+  ) {
+    return (
+      <Shell
+        title={`${room} equipment`}
+        subtitle="Review live equipment readiness before continuing."
+        back={back}
+        home={home}
+      >
+        <EquipmentDataNotice status={roomEquipmentForView.status} />
+      </Shell>
+    );
+  }
 
   if (["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
     const liveBookedStarts =
@@ -3741,14 +4087,7 @@ export default function Home() {
     );
   }
   if (["setup2", "setup3", "setup4", "setup5"].includes(screen)) {
-    const data =
-      room === "MPR 2"
-        ? mpr2
-        : room === "MPR 4"
-          ? mpr4
-          : room === "MPR 5"
-            ? mpr5
-            : mpr3;
+    const data = roomEquipmentData;
     const ready = data.filter((x) => x.status === "ready");
     const issueOrder: Record<Equipment["status"], number> = {
       missing: 0,
@@ -3906,14 +4245,7 @@ export default function Home() {
   }
 
   if (screen === "available-equipment") {
-    const data =
-      room === "MPR 2"
-        ? mpr2
-        : room === "MPR 4"
-          ? mpr4
-          : room === "MPR 5"
-            ? mpr5
-            : mpr3;
+    const data = roomEquipmentData;
 
     const ready = data.filter((item) => item.status === "ready");
     const normalizedAvailableQuery =
@@ -3989,8 +4321,8 @@ export default function Home() {
     );
   }
   if (screen === "issues3") {
-    const mixer = mpr3.find((item) => item.id === "MIX-01")!;
-    const microphoneStand = mpr3.find((item) => item.id === "MS-01")!;
+    const mixer = roomEquipmentData.find((item) => item.id === "MIX-01")!;
+    const microphoneStand = roomEquipmentData.find((item) => item.id === "MS-01")!;
     return (
       <Shell
         title="Equipment availability issues"
@@ -4043,7 +4375,7 @@ export default function Home() {
       attention: 3,
       ready: 4,
     };
-    const affected = mpr5
+    const affected = roomEquipmentData
       .filter((item) => item.status !== "ready")
       .sort(
         (a, b) =>
@@ -4112,6 +4444,18 @@ export default function Home() {
     screen === "stand-search" ||
     screen === "alternative-search"
   ) {
+    if (!demoPresentation && directoryEquipmentStatus !== "loaded") {
+      return (
+        <Shell
+          title="Equipment alternatives"
+          subtitle="Find alternatives by location and condition."
+          back={back}
+          home={home}
+        >
+          <EquipmentDataNotice status={directoryEquipmentStatus} />
+        </Shell>
+      );
+    }
     const mixer = screen === "mixer-search";
     const stand = screen === "stand-search";
     const sourceRoom = alternativeSourceRoom || room;
@@ -4202,7 +4546,7 @@ export default function Home() {
         resultOrder[item.status],
       ];
     };
-    const results = directoryEquipment
+    const results = directoryEquipmentForView
       .filter(
         (item) =>
           item.id !== alternativeSourceItemId &&
@@ -4324,14 +4668,7 @@ export default function Home() {
     );
   }
   if (screen === "review") {
-    const data =
-      room === "MPR 2"
-        ? mpr2
-        : room === "MPR 4"
-          ? mpr4
-          : room === "MPR 5"
-            ? mpr5
-            : mpr3;
+    const data = roomEquipmentData;
     const reviewOrder: Record<Equipment["status"], number> = {
       missing: 0,
       service: 1,
@@ -4357,23 +4694,34 @@ export default function Home() {
           room={room}
           time={time}
           date={bookingDate}
-          bookedFor={studentName.trim() || undefined}
+          bookedFor={(currentUser?.fullName ?? studentName.trim()) || undefined}
         />
         <div className="mt-3.5 sm:mt-5">
           <label htmlFor="student-name" className="mb-1.5 block text-sm font-semibold">
-            Your name
+            {currentUser ? "Account name" : "Your name"}
           </label>
           <Input
+            id="student-name"
             type="text"
-            value={studentName}
+            value={currentUser?.fullName ?? studentName}
             onChange={(event) => setStudentName(event.target.value)}
             placeholder="Student Practice User"
             maxLength={80}
+            disabled={Boolean(currentUser)}
           />
           <p className="mt-1.5 text-xs text-slate-500 dark:text-[#9AA6BC]">
-            Shown on the time slots so others can see who is in the room.
+            {currentUser
+              ? "Your signed-in name will be shown on the time slots."
+              : "Shown on the time slots so others can see who is in the room."}
           </p>
         </div>
+        <BookingAccountPanel
+          user={currentUser}
+          onUserChange={(user) => {
+            setCurrentUser(user);
+            setStudentName(user?.fullName ?? "");
+          }}
+        />
         <div
           className={`mt-3.5 rounded-2xl border p-3.5 sm:mt-5 sm:p-4 ${
             hasIssues
@@ -4591,6 +4939,11 @@ export default function Home() {
               Browse by Location
             </TabsTrigger>
           </TabsList>
+          {!demoPresentation && directoryEquipmentStatus !== "loaded" && (
+            <div className="mt-3">
+              <EquipmentDataNotice status={directoryEquipmentStatus} />
+            </div>
+          )}
           <TabsContent value="search" className="mt-1.5 sm:mt-5">
             <form
               onSubmit={(e) => {
@@ -4729,7 +5082,16 @@ export default function Home() {
       </Shell>
     );
   }
-  if (screen === "directory-browse")
+  if (screen === "directory-browse") {
+    const locationOptions = demoPresentation
+      ? locations
+      : Array.from(
+          new Set(
+            (liveDirectoryEquipment ?? emptyEquipment).map(
+              (item) => item.currentLocation,
+            ),
+          ),
+        ).sort();
     return (
       <Shell
         title="Browse by location"
@@ -4737,29 +5099,49 @@ export default function Home() {
         back={back}
         home={home}
       >
-        <div className="grid grid-cols-2 gap-3">
-          {locations.map((l) => (
-            <button
-              key={l}
-              onClick={() => {
-                setLocation(l);
-                setLocationQuery("");
-                setDirectoryTab("available");
-              }}
-              className={`min-h-14 rounded-2xl border p-3 font-semibold ${location === l ? "border-violet-500 bg-violet-50 dark:bg-[#211A38] text-violet-800 dark:text-violet-200" : "border-slate-200 bg-white dark:border-[#3A4358] dark:bg-[#1B2133] dark:text-[#CBD3E2] dark:hover:border-violet-500/70 dark:hover:bg-[#202739]"}`}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
+        {!demoPresentation && directoryEquipmentStatus !== "loaded" ? (
+          <EquipmentDataNotice status={directoryEquipmentStatus} />
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {locationOptions.map((l) => (
+              <button
+                key={l}
+                onClick={() => {
+                  setLocation(l);
+                  setLocationQuery("");
+                  setDirectoryTab("available");
+                }}
+                className={`min-h-14 rounded-2xl border p-3 font-semibold ${location === l ? "border-violet-500 bg-violet-50 dark:bg-[#211A38] text-violet-800 dark:text-violet-200" : "border-slate-200 bg-white dark:border-[#3A4358] dark:bg-[#1B2133] dark:text-[#CBD3E2] dark:hover:border-violet-500/70 dark:hover:bg-[#202739]"}`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
         <ActionBar>
-          <Primary disabled={!location} onClick={() => go("directory-results")}>
+          <Primary
+            disabled={!location || (!demoPresentation && directoryEquipmentStatus !== "loaded")}
+            onClick={() => go("directory-results")}
+          >
             View Equipment <ArrowRight />
           </Primary>
         </ActionBar>
       </Shell>
     );
+  }
   if (screen === "directory-results") {
+    if (!demoPresentation && directoryEquipmentStatus !== "loaded") {
+      return (
+        <Shell
+          title={`${location} equipment`}
+          subtitle="Review current locations and working conditions."
+          back={back}
+          home={home}
+        >
+          <EquipmentDataNotice status={directoryEquipmentStatus} />
+        </Shell>
+      );
+    }
     const normalizedLocationQuery = normalizeEquipmentSearch(locationQuery);
     const filterAndRankLocationItems = (items: Equipment[]) =>
       items

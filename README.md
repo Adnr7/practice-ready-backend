@@ -46,7 +46,7 @@ The first pilot contains the research's four Must-Haves: **1, 2, 6 and 7**, supp
 - **Node's test runner** for existing unit tests; real Worker/D1 integration and browser suites are planned.
 
 ```text
-app/page.tsx             Main prototype UI; live reads plus remaining fixture data
+app/page.tsx             Main prototype UI; live inventory/session reads plus prototype journeys
 app/api/                 Existing REST route handlers
 components/              UI components
 db/                      Database binding and schema
@@ -204,7 +204,7 @@ Checks were run against backend baseline `d0f1682` while preparing these documen
 | Local D1 schema / built Worker / seed / room reads | Passed using the bootstrap/preview commands above |
 | Concurrent API writes / browser acceptance / remote deployment | Not verified by these baseline checks; explicit implementation release gates |
 
-The current conflict test operates on arrays sequentially. It does not establish database concurrency safety. The UI also currently has a fallback success path and reads fixtures for much of the journey. These are first-order implementation tasks in the [audit](docs/CURRENT_STATE.md).
+The current conflict test operates on arrays sequentially. It does not establish database concurrency safety. The booking UI now uses the backend session when one exists, while anonymous booking remains supported by the current backend route. Equipment directory and room setup reads use the live API by default; the legacy fixture presentation is available only with the explicit `?demo=1` query parameter (or `NEXT_PUBLIC_DEMO_PRESENTATION=true`). Other fixture-backed prototype journeys and unsupported booking lifecycle flows remain outside this integration.
 
 ## Deployment direction
 
