@@ -23,7 +23,7 @@ async function applyMigrations(db) {
   for (const file of [
     "0000_lush_misty_knight.sql",
     "0001_new_the_hood.sql",
-    "0002_rich_korath.sql",
+    "0004_equipment_movements.sql",
   ]) {
     const migration = await readFile(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").filter((sql) => sql.trim())) {
