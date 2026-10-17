@@ -145,7 +145,7 @@ Portable `dev` selects port 5173. The build/preview workflow above was verified 
 | `dev` | Development server through the repository's framework wrapper |
 | `build` | Build Worker/server and browser assets |
 | `start` | Run the built Worker locally using `dist/server/wrangler.json` and `.wrangler/state` |
-| `test` | Existing Node unit tests and sequential conflict simulation |
+| `test` | Node unit tests plus D1-backed booking and movement integration tests |
 | `lint` | ESLint; baseline findings are listed below |
 | `db:generate` | Generate SQL after changing `db/schema.ts`; review generated changes |
 | `db:migrate` | Currently invokes Drizzle migration without a configured database target; use the documented local bootstrap until P0 completes migration setup |
@@ -198,7 +198,7 @@ This table describes **current code**, not the proposed final contract. Response
 | GET | `/api/reports/:id` | Authenticated owner or staff report detail with update history |
 | PATCH | `/api/reports/:id` | Technician/admin status and message update |
 
-Rescheduling, usage logs, repair tracking, suitability, reports, support requests and movement history require new endpoints/workflows. See the [target API design](docs/ARCHITECTURE.md).
+Rescheduling, usage logs, repair tracking, suitability, reports and support requests require new endpoints/workflows. See the [target API design](docs/ARCHITECTURE.md).
 
 ## Verification snapshot — 2026-10-04
 

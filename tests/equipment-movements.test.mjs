@@ -85,6 +85,14 @@ describe("Persistent equipment movement workflow", () => {
     assert.equal(await db.prepare("SELECT count(*) FROM equipment_movements WHERE status = 'open'").first("count(*)"), 1);
   });
 
+  it("rolls back the location update when movement history cannot be inserted", async () => {
+    await db.prepare("CREATE TRIGGER fail_movement_insert BEFORE INSERT ON equipment_movements BEGIN SELECT RAISE(ABORT, 'test movement failure'); END").run();
+
+    await assert.rejects(createMovement(db, { actor: student, equipmentId: 1, toLocationId: 2 }));
+    assert.equal((await db.prepare("SELECT current_location_id FROM equipment WHERE id = 1").first()).current_location_id, 1);
+    assert.equal(await db.prepare("SELECT count(*) FROM equipment_movements").first("count(*)"), 0);
+  });
+
   it("enforces one open movement and prevents a stale/competing move", async () => {
     await createMovement(db, { actor: student, equipmentId: 1, toLocationId: 2 });
 
@@ -126,6 +134,10 @@ describe("Persistent equipment movement workflow", () => {
 
   it("records staff correction, closes an open movement, and exposes history by owner", async () => {
     const movement = await createMovement(db, { actor: student, equipmentId: 1, toLocationId: 2 });
+    await assert.rejects(
+      correctMovement(db, { actor: otherStudent, movementId: movement.id, locationId: 3, reason: "Not staff" }),
+      (error) => error instanceof MovementError && error.status === 403,
+    );
     const corrected = await correctMovement(db, {
       actor: technician,
       movementId: movement.id,

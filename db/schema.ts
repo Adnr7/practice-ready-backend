@@ -64,7 +64,8 @@ export const equipmentMovements = sqliteTable("equipment_movements", {
 }, (table) => [
   index("idx_equipment_movements_equipment").on(table.equipmentId, table.status),
   index("idx_equipment_movements_user").on(table.movedByUserId, table.movedAt),
-  index("idx_equipment_movements_open").on(table.equipmentId, table.status),
+  uniqueIndex("idx_equipment_movements_one_open").on(table.equipmentId)
+    .where(sql`${table.status} = 'open'`),
 ]);
 
 export const movementReturnEvents = sqliteTable("movement_return_events", {

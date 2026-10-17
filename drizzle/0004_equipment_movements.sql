@@ -23,7 +23,6 @@ CREATE TABLE `equipment_movements` (
 --> statement-breakpoint
 CREATE INDEX `idx_equipment_movements_equipment` ON `equipment_movements` (`equipment_id`,`status`);--> statement-breakpoint
 CREATE INDEX `idx_equipment_movements_user` ON `equipment_movements` (`moved_by_user_id`,`moved_at`);--> statement-breakpoint
-CREATE INDEX `idx_equipment_movements_open` ON `equipment_movements` (`equipment_id`,`status`);--> statement-breakpoint
 CREATE UNIQUE INDEX `idx_equipment_movements_one_open` ON `equipment_movements` (`equipment_id`) WHERE `status` = 'open';--> statement-breakpoint
 CREATE TABLE `movement_return_events` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
