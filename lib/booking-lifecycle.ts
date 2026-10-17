@@ -163,11 +163,6 @@ async function targetSlotCount(
   return { count: requiredSlots.length - conflictingSlots.length, conflictingSlots };
 }
 
-function claimConflict(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /unique constraint failed: booking_claims\.time_slot_id/i.test(error.message) || claimConflict(error.cause);
-}
-
 export async function getBookingView(db: D1Database, bookingId: number): Promise<BookingView | null> {
   const row = await getBookingRow(db, bookingId);
   return row ? toView(row) : null;

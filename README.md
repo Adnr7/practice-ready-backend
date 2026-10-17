@@ -96,15 +96,15 @@ the seed process.
 
 ### Initialize an empty local database
 
-The current SQL lives under `drizzle/`, but root Wrangler configuration does not yet set `migrations_dir`. For a **new, empty local database**, apply the checked-in migrations explicitly, in order:
+The current SQL lives under `drizzle/`, and root Wrangler configuration sets `migrations_dir` to `drizzle`. For a **new, empty local database**, apply the checked-in migrations explicitly, in order:
 
 ```bash
-for migration in drizzle/0000_lush_misty_knight.sql drizzle/0001_new_the_hood.sql drizzle/0002_rich_korath.sql; do
+for migration in drizzle/0000_lush_misty_knight.sql drizzle/0001_new_the_hood.sql drizzle/0002_open_layla_miller.sql drizzle/0003_amusing_nekra.sql drizzle/0004_equipment_movements.sql drizzle/0005_reservation_lifecycle.sql drizzle/0006_room_readiness.sql; do
   corepack pnpm exec wrangler d1 execute practice_ready_db --local --persist-to .wrangler/state --file "$migration"
 done
 ```
 
-These bootstrap commands are not idempotent: skip them if these tables already exist. They also do not populate Wrangler's migration ledger. Do not use `db:generate` as a substitute for applying an existing migration.
+These bootstrap commands are not idempotent: skip them if these tables already exist. They also do not populate Wrangler's migration ledger. Do not use `db:generate` as a substitute for applying an existing migration. A staging/production D1 rollout must apply the same sequence through Wrangler after taking a backup.
 
 Start the built application against the local Worker/D1 state:
 

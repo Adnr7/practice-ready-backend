@@ -40,7 +40,6 @@ async function applyMigrations(db) {
 
 const student = { userId: 1, role: "student" };
 const otherStudent = { userId: 2, role: "student" };
-const technician = { userId: 3, role: "technician" };
 
 async function addSlots(db, roomId, date, starts) {
   await db.batch(starts.map((start) => db.prepare(

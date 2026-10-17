@@ -23,7 +23,6 @@ async function applyMigrations(db) {
 }
 
 const technician = { userId: 3, role: "technician" };
-const student = { userId: 1, role: "student" };
 
 describe("Persistent room readiness, repairs, and suitability", () => {
   let emulator;

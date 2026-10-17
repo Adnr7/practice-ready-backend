@@ -1,4 +1,3 @@
-import { getInstitutionNow } from "./booking-engine.ts";
 import type { BookingActor } from "./booking-lifecycle.ts";
 
 export type RoomReadinessState = "usable" | "restricted" | "closed" | "unknown";
@@ -69,10 +68,6 @@ function parseIso(value: unknown, label: string, nullable = false): string | nul
     throw new RoomReadinessError(`${label} must be a valid ISO timestamp.`, 400, "TIMESTAMP_INVALID");
   }
   return new Date(value).toISOString();
-}
-
-function isStaff(actor: BookingActor): boolean {
-  return actor.role === "technician" || actor.role === "admin";
 }
 
 export async function getRoomReadiness(db: D1Database, roomId: number, now = new Date()): Promise<RoomReadiness | null> {
