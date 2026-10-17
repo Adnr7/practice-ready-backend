@@ -1,184 +1,80 @@
 # Practice Ready
 
-**Practice Ready** is an HCI/UI-UX prototype for improving Music Practice Room (MPR) booking and equipment readiness at the True School of Music.
+**Find a suitable music practice room, check its equipment, and reserve it with confidence.**
 
-The project addresses a practical problem faced by students: before arriving for practice, they may not have a reliable way to know whether an MPR is available, what equipment is assigned to it, where that equipment is currently located, or whether it is in working condition.
+Practice Ready is a student and facilities application for Music Practice Rooms (MPRs) at the True School of Music (TSM). This repository extends the original HCI prototype with a TypeScript backend on Cloudflare Workers and D1.
 
-Practice Ready brings this information together so students can make a more informed room-booking decision before beginning a practice session.
+**Current status:** interactive prototype plus a partially integrated backend. Live availability, reservation, equipment, schedule and booking-status paths now exist, but account boundaries, full booking lifecycle support and several V1 workflows still need implementation. The target is all **17 features** in the supplied V1 scope diagram.
 
-## Live Links
+## Start with the project documents
 
-- **Current Interactive Prototype:** https://practice-ready.asmi-battoo.workers.dev
-- **HCI/UI-UX Case Study:** https://asmib170.github.io/practice-ready/
+| Document | What it answers |
+|---|---|
+| [PRD](docs/PRD.md) | Who the product serves, all 17 requirements, acceptance criteria, business rules and pilot goals |
+| [Implementation plan](docs/IMPLEMENTATION_PLAN.md) | What to build first, dependencies, estimates, work packages and release gates |
+| [Architecture](docs/ARCHITECTURE.md) | Stack decision, proposed schema, API contracts, authentication and atomic booking design |
+| [Current-state audit](docs/CURRENT_STATE.md) | What the repository actually implements and the concrete gaps to close |
 
-## Must-Have Features
+The October 2026 documents are the proposed implementation baseline. Documents under `docs/superpowers/` record the earlier backend design and are retained as historical context.
 
-The prototype is built around four prioritized Must-Have features:
+## Project and research links
 
-1. **View MPR availability and daily time slots**
-2. **Reserve an MPR time slot**
-3. **View MPR setups and TSM equipment locations**, including default and current locations
-4. **View equipment working condition**
+- **Backend repository:** https://github.com/Adnr7/practice-ready-backend
+- **Original project:** https://github.com/asmib170/practice-ready
+- **Research case study:** https://asmib170.github.io/practice-ready/
+- **Original interactive prototype:** https://practice-ready.asmi-battoo.workers.dev
 
-## Design Process
+The research and prototype were created by Asmi B. The case study explains the missing-mixer scenario, interviews, card sorting, tree testing and feature prioritization. Prototype room/equipment data is illustrative; an operational rollout needs an FTS-verified inventory. The linked prototype is not evidence that this backend branch is deployed there.
 
-The project was developed through an iterative HCI/UI-UX process involving:
+## Product scope
 
-- User interviews
-- Information architecture
-- Open hierarchical card sorting
-- Tree testing and IA refinement
-- Feature prioritization
-- Skeletal wireframing
-- Nielsen heuristic inspection
-- Interactive prototyping
-- Informal usability testing and iterative refinement
+| Area | Full V1 capabilities |
+|---|---|
+| **Find a Room** | Vocal practice (9), band rehearsals (10), individual instrument practice (11), room conditions and restrictions (14) |
+| **Equipment** | Room setups and equipment locations (6), working condition (7), repair progress and expected return (8), temporary relocation logging (17) |
+| **Reservations / My Reservations** | Availability (1), reserve (2), reschedule (3), cancel (4), session equipment-use logging (5), booking/usage rules (15) |
+| **Reports & Support** | Missing/damaged equipment reports (12), room-maintenance reports (13), FTS assistance (16) |
 
-The interface was refined around principles including visibility of system status, error prevention, consistency and standards, recognition rather than recall, clear affordances, and user control and freedom.
+The first pilot contains the research's four Must-Haves: **1, 2, 6 and 7**, supported by authentication, reliable persistence and staff updates. Full V1 completes the remaining features. The published research later added **18: edit equipment records** and **19: completed session history**; these are identified as V1.1 candidates in the plan.
 
-## Prototype
+## Stack and repository map
 
-The current responsive prototype supports the complete room-booking journey across desktop and mobile.
+- **TypeScript, React 19, Tailwind CSS** and existing UI components.
+- **Vinext / Vite**, using Next.js-style App Router pages and API handlers.
+- **Cloudflare Workers + D1 (SQLite)**, with Drizzle ORM and SQL migrations.
+- Current **WebCrypto credential/session helpers**; the target architecture adds revocable sessions and stronger account boundaries.
+- **Node's test runner** for existing unit tests; real Worker/D1 integration and browser suites are planned.
 
-Users can:
-
-- Select a date, MPR, time period and consecutive 30-minute time slots, with a maximum booking duration of three hours.
-- Switch between time periods while viewing detailed room availability.
-- Change the selected MPR from the time-period or time-slot flow without losing the current selection when the same MPR is retained.
-- Preserve selected time periods and selected time-slot ranges when reviewing the same MPR, while clearing room-specific slot selections when a genuinely different MPR is chosen.
-- Review an MPR's equipment readiness before continuing with a reservation.
-- View currently available equipment assigned to an MPR and search that list by equipment name or ID.
-- Search the Equipment Directory by equipment name, type, ID or common descriptive terms.
-- Browse equipment by TSM location.
-- Compare Available and Unavailable equipment states.
-- View default location, current location and working condition where relevant.
-- Search for alternatives when assigned equipment is unavailable.
-- Recover from equipment-availability issues without implying that equipment can be borrowed or relocated.
-- Recover from a real booking conflict by adjusting the selected time or choosing another MPR.
-
-Equipment search supports meaningful partial terms, word prefixes, common aliases and equipment-specific combinations across the Equipment Directory, MPR equipment lists, location browsing and contextual alternative searches. Results prioritize the actual requested equipment type before related accessories or label matches, preserve the established location order, avoid unintended substring matches and automatically open the Unavailable tab when no available matches exist but unavailable matches do.
-
-For broad equipment queries, results are also contextually ranked. For example, a search for **guitar** prioritizes acoustic, electric and bass guitars before related amplifiers, instrument cables, individual stands and floor racks.
-
-The prototype also includes an expanded illustrative equipment inventory across practice rooms and performance spaces, including wired and wireless microphones, PA speakers, guitar stands and racks, amplifiers, cables and other rehearsal equipment.
-
-## Audio Experience
-
-Practice Ready includes a subtle music-focused audio layer designed to support the atmosphere of the prototype without interfering with task completion.
-
-- Smooth-jazz background music plays on the Home screen at the main listening level.
-- The same track continues at a lower volume on internal task-focused screens.
-- On desktop/laptop, the Home music level is approximately **23%** and internal pages are approximately **15%**.
-- On mobile, the Home music level is approximately **23%** and internal pages are approximately **13%**.
-- Successful-booking and conflict/error final screens remain at the same lower internal-page music level rather than increasing back to the Home level.
-- A short three-note success chime provides additional confirmation feedback when a booking is completed.
-- A soft descending two-note conflict tone plays once when the booking-conflict/error state appears, giving clear negative-state feedback without using a harsh buzzer or alarm sound.
-- Enabled buttons throughout the interface use a very subtle rounded interaction tone rather than a conventional click sound.
-- The animated time-period intro on the **Choose Your Time Slots** screen uses a quiet six-note ascending bar-chime sequence synchronized with the existing cascading tab animation.
-- The bar-chime sequence plays only during that intro animation. Manually switching between Early Morning, Morning, Afternoon, Evening, Night and Late Night continues to use the standard subtle button-interaction tone instead.
-- The music control mutes and unmutes the **background jazz only**. Interface feedback sounds—including the rounded button tone, booking-success chime, booking-conflict/error tone and animated time-period bar chimes—remain available when the background music is muted.
-- On mobile, the music control is shown on the Home screen only.
-- On desktop/laptop, the music control remains accessible throughout the interface.
-- Web Audio gain control is used for reliable background-music volume changes, while the short UI feedback sounds are preloaded audio assets for more consistent playback across supported mobile and desktop browsers, including iPhone.
-
-The audio layer is supplementary and does not affect the booking workflow if background music is muted or unavailable.
-
-## Interface
-
-The interface includes:
-
-- Responsive desktop and mobile layouts
-- Light and dark themes
-- Animated ambient backgrounds
-- Written equipment-status labels
-- Consistent selected and disabled states
-- Mobile-safe sticky actions
-- Contextual booking-state preservation
-- Equipment image/detail views
-- Shared semantic search behavior across equipment-related flows
-- Background music and subtle audio interaction feedback
-
-## Technology
-
-- TypeScript
-- React 19
-- Vinext (Next.js App Router on Cloudflare Workers)
-- Cloudflare D1 (SQLite) with Drizzle ORM
-- Edge WebCrypto API (PBKDF2 password hashing & HMAC-SHA256 sessions)
-- Tailwind CSS
-- Web Audio API
-- Cloudflare Wrangler tooling
-
-## Production Backend Architecture
-
-Practice Ready includes an enterprise-ready, serverless edge backend tailored for university music conservatory deployments:
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Cloudflare Workers Runtime                      │
-│                                                                        │
-│  ┌────────────────────────┐         ┌───────────────────────────────┐  │
-│  │   Next.js / Vinext     │         │       REST API Endpoints      │  │
-│  │   Client UI Components │ ◄─────► │     (app/api/.../route.ts)    │  │
-│  │    (Preserved 100%)    │  fetch  │   - Auth & Session Cookies    │  │
-│  └────────────────────────┘         │   - Availability & Slots      │  │
-│                                     │   - Atomic Booking Engine     │  │
-│                                     │   - Equipment Readiness       │  │
-│                                     └──────────────┬────────────────┘  │
-│                                                    │                   │
-│                                     ┌──────────────▼────────────────┐  │
-│                                     │          Drizzle ORM          │  │
-│                                     │   (drizzle-orm/d1 + Schema)   │  │
-│                                     └──────────────┬────────────────┘  │
-└────────────────────────────────────────────────────┼───────────────────┘
-                                                     │
-                                      ┌──────────────▼────────────────┐
-                                      │    Cloudflare D1 (SQLite)     │
-                                      │   - Users & RBAC Sessions     │
-                                      │   - Rooms & Campus Locations  │
-                                      │   - Equipment & Conditions    │
-                                      │   - Slots & Atomic Bookings   │
-                                      └───────────────────────────────┘
+```text
+app/page.tsx             Main prototype UI; live reads plus remaining fixture data
+app/api/                 Existing REST route handlers
+components/              UI components
+db/                      Database binding and schema
+drizzle/                 Initial SQL migration and Drizzle metadata
+lib/                     Booking engine, auth, API client, seed data, images
+tests/                   Existing auth, API, booking-rule/store and conflict-simulation tests
+scripts/                 Development/build/environment tooling
+docs/                    PRD, architecture, audit and implementation roadmap
+assets/, public/         Case-study and application media
+wrangler.json            Root Worker/D1 configuration
+vite.config.ts           Vinext and Cloudflare build configuration
 ```
 
-### Database Schema (`db/schema.ts`)
-- **`users`**: University student & staff accounts (`student`, `technician`, `admin`) with PBKDF2 hash + salt and student ID records.
-- **`rooms`**: Music Practice Rooms (MPR 2, 3, 4, 5, Performance Hall) with capacity, description, and status.
-- **`locations`**: Campus locations (rooms, blocks, labs, storage).
-- **`equipment`**: 40+ authentic music gear items tracking default room, current physical location, condition, and status (`ready`, `away`, `attention`, `service`, `missing`).
-- **`time_slots`**: Pre-generated 30-minute intervals indexed by `(room_id, date, status)`.
-- **`bookings`**: Reservations with institutional booking reference (`PR-YYYY-XXXX`), student ownership, and duration constraints.
-- **`booking_slots`**: Relational junction table linking bookings to reserved time slots.
+**Recommended direction:** extend the existing stack in small, tested vertical slices. The [architecture](docs/ARCHITECTURE.md) explains the decision and the specific contingency for a framework blocker.
 
-### REST API Reference
+## Local setup
 
-| Method | Endpoint | Description | Role / Access |
-|---|---|---|---|
-| `POST` | `/api/auth/register` | Student/Staff account registration | Public |
-| `POST` | `/api/auth/login` | Login and set `pr_session` HTTP-only cookie | Public |
-| `POST` | `/api/auth/logout` | Clear session cookie | Authenticated |
-| `GET` | `/api/auth/me` | Current user profile & role verification | Authenticated |
-| `GET` | `/api/rooms` | Active practice rooms with capacity | Public |
-| `GET` | `/api/availability` | Room slots grouped by period (`?roomId=X&date=YYYY-MM-DD`) | Public |
-| `POST` | `/api/bookings` | Atomic slot booking with double-booking prevention | Student / Guest |
-| `GET` | `/api/bookings` | Retrieve user bookings (`?filter=upcoming\|past`) | Student / Admin |
-| `DELETE` | `/api/bookings/:id` | Cancel reservation and release time slots | Owner / Admin |
-| `GET` | `/api/equipment` | Search equipment (`?query=&type=&locationId=&status=`) | Public |
-| `GET` | `/api/equipment/room/:roomId` | Room equipment readiness breakdown (ready, away, attention) | Public |
-| `PATCH` | `/api/equipment/:id` | Update equipment condition or physical location | Technician / Admin |
-| `POST` | `/api/seed` | Initialize True School of Music rooms, gear, and slots | Admin / Dev |
+### Prerequisites
 
-### Booking Policy Enforcement
-1. **Continuous 30-Minute Slots**: Disallows gap bookings or arbitrary time offsets.
-2. **Maximum 3-Hour Duration**: Limits single student reservations to 180 minutes (6 consecutive 30-min slots).
-3. **Atomic Concurrency Check**: If another user reserves an overlapping slot concurrently, returns `409 Conflict` with `conflictingSlots` list.
+- **Node.js >=22.13.0**; baseline checks used Node 22.22.0.
+- **pnpm 11.25.0**, pinned in `package.json`. Commands below use Corepack; if Corepack is unavailable, install the pinned pnpm version and replace `corepack pnpm` with `pnpm`.
+- Git. Cloudflare credentials are needed for remote resources, not the local D1 preview below.
 
-## Local Setup & Development
-
-Install dependencies:
+Clone this repository, open a terminal in its root, then run:
 
 ```bash
-pnpm install
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
 ```
 
 Configure local/runtime secrets before using authentication or seeding:
@@ -193,52 +89,129 @@ ADMIN_PASSWORD=replace-with-a-strong-admin-password
 EOF
 ```
 
-For Cloudflare deployment, store the same values with `wrangler secret put`
-instead of committing them. Seeding requires an authenticated administrator or
-an `Authorization: Bearer <SEED_TOKEN>` request. Public registration always
-creates student accounts; technician and admin accounts must be provisioned by
-an administrator or the seed process.
+For Cloudflare deployment, store these values with `wrangler secret put`
+instead of committing them. Public registration always creates student
+accounts; technician and admin accounts are provisioned by an administrator or
+the seed process.
 
-Generate database migrations:
+### Initialize an empty local database
 
-```bash
-pnpm db:generate
-```
-
-Run unit & concurrency tests:
+The current SQL lives under `drizzle/`, but root Wrangler configuration does not yet set `migrations_dir`. For a **new, empty local database**, apply the checked-in initial schema explicitly:
 
 ```bash
-npm test
+corepack pnpm exec wrangler d1 execute practice_ready_db --local --persist-to .wrangler/state --file drizzle/0000_lush_misty_knight.sql
 ```
 
-Build the project:
+This bootstrap command is not idempotent: skip it if these tables already exist. It also does not populate Wrangler's migration ledger. P0 of the implementation plan establishes the tracked migration workflow for subsequent schema changes. Do not use `db:generate` as a substitute for applying an existing migration.
+
+Start the built application against the local Worker/D1 state:
 
 ```bash
-npm run build
+corepack pnpm start --port 8787
 ```
 
-Start the production server:
+Open **http://127.0.0.1:8787**. In a second terminal, initialize the **local demo** dataset and verify a read:
 
 ```bash
-npx vinext start
+SEED_TOKEN=replace-with-the-value-from-.dev.vars
+curl --fail-with-body -X POST http://127.0.0.1:8787/api/seed \
+  -H "Authorization: Bearer ${SEED_TOKEN}"
+curl --fail-with-body http://127.0.0.1:8787/api/rooms
 ```
 
-## Cloudflare D1 Deployment Guide
+The seed requires either an administrator session or the configured seed token,
+and `ADMIN_PASSWORD` is required when bootstrapping the administrator. It
+creates illustrative inventory for local evaluation, not production
+provisioning. The checked baseline produced 5 rooms, 8 locations, 32 assets
+and 2,520 slots for 14 days. Use IDs returned by the API: room names do not
+equal database IDs.
 
-1. Create the D1 database on Cloudflare:
-   ```bash
-   npx wrangler d1 create practice_ready_db
-   ```
-2. Update the `database_id` in `wrangler.json`.
-3. Apply migrations to Cloudflare D1:
-   ```bash
-   npx wrangler d1 migrations apply practice_ready_db --remote
-   ```
-4. Deploy the Workers application:
-   ```bash
-   npx wrangler deploy
-   ```
-5. Trigger initial seeding:
-   ```bash
-   curl -X POST https://<your-worker>.workers.dev/api/seed
-   ```
+### Development and checks
+
+```bash
+corepack pnpm dev
+corepack pnpm test
+corepack pnpm exec tsc --noEmit
+corepack pnpm lint
+corepack pnpm build
+```
+
+Portable `dev` selects port 5173. The build/preview workflow above was verified for local API/database work; check the effective `DB` binding when using a different execution profile.
+
+| Script | Meaning |
+|---|---|
+| `dev` | Development server through the repository's framework wrapper |
+| `build` | Build Worker/server and browser assets |
+| `start` | Run the built Worker locally using `dist/server/wrangler.json` and `.wrangler/state` |
+| `test` | Existing Node unit tests and sequential conflict simulation |
+| `lint` | ESLint; baseline findings are listed below |
+| `db:generate` | Generate SQL after changing `db/schema.ts`; review generated changes |
+| `db:migrate` | Currently invokes Drizzle migration without a configured database target; use the documented local bootstrap until P0 completes migration setup |
+
+### Configuration
+
+| Setting / file | Current meaning |
+|---|---|
+| `DB` | Cloudflare D1 binding expected by `db/index.ts` |
+| `AUTH_SECRET` | Required session-signing secret; takes precedence over `JWT_SECRET` |
+| `JWT_SECRET` | Legacy alternative used by current auth code |
+| `SEED_TOKEN` | Optional bearer token for controlled local/operator seeding |
+| `ADMIN_PASSWORD` | Required, 12+ characters, when the seed bootstraps the admin |
+| `STUDENT_PASSWORD` | Optional password for the local demo student account |
+| `.dev.vars` | Local Worker secrets file; ignored and never commit it |
+| `wrangler.json` | Worker identity and a specific D1 database ID; remote environments need their own bindings |
+| `.openai/hosting.json` | Inherited hosting metadata naming `DB` |
+
+Authentication now fails closed when no secret is configured. Do not treat
+local seed accounts or the inherited Sites sign-in mock as operational
+authentication; the application uses its own `pr_session` cookie.
+
+## Existing API routes
+
+This table describes **current code**, not the proposed final contract. Responses and authorization will change as the planned foundations are implemented.
+
+| Method | Route | Current behavior |
+|---|---|---|
+| POST | `/api/auth/register` | Creates a student account/session; submitted technician/admin roles are ignored |
+| POST | `/api/auth/login` | Credential login and session cookie |
+| POST | `/api/auth/logout` | Clears the session cookie |
+| GET | `/api/auth/me` | Current profile or null user |
+| GET | `/api/rooms` | Public active-room list |
+| GET | `/api/availability?roomId=&date=YYYY-MM-DD` | Public slots grouped by period; may generate missing slots |
+| POST | `/api/bookings` | Validates and reserves slots through the D1 booking store; still accepts evaluation guest requests |
+| GET | `/api/bookings?filter=upcoming\|past` | Own bookings, all for staff; unauthenticated requests return an empty list |
+| DELETE | `/api/bookings/:id` | Owner/staff cancellation with a start-time cutoff and transactional slot release |
+| GET | `/api/bookings/status?ref=` | Returns the current booking phase for the active-reservation card |
+| GET | `/api/equipment?query=&type=&locationId=&status=` | Public inventory search/filter |
+| GET | `/api/equipment/room/:roomId` | Default room equipment grouped by readiness |
+| PATCH | `/api/equipment/:id` | Technician/admin condition/location update |
+| GET | `/api/schedule?date=` | Public room schedule for the operational day, including booked display names |
+| POST | `/api/seed` | Controlled seed using an admin session or configured bearer token |
+
+Rescheduling, usage logs, repair tracking, suitability, reports, support requests and movement history require new endpoints/workflows. See the [target API design](docs/ARCHITECTURE.md).
+
+## Verification snapshot — 2026-10-04
+
+Checks were run against backend baseline `d0f1682` while preparing these documents:
+
+| Check | Result |
+|---|---|
+| Frozen dependency installation | Passed with pnpm 11.25.0 |
+| `npm test` | **13 passed**, 0 failed |
+| `corepack pnpm exec tsc --noEmit` | Passed |
+| `corepack pnpm build` | Passed; reported a large client-chunk warning |
+| `corepack pnpm lint` | **20 existing errors, 22 warnings**; tracked in P0 |
+| Local D1 schema / built Worker / seed / room reads | Passed using the bootstrap/preview commands above |
+| Concurrent API writes / browser acceptance / remote deployment | Not verified by these baseline checks; explicit implementation release gates |
+
+The current conflict test operates on arrays sequentially. It does not establish database concurrency safety. The UI also currently has a fallback success path and reads fixtures for much of the journey. These are first-order implementation tasks in the [audit](docs/CURRENT_STATE.md).
+
+## Deployment direction
+
+Host the application/API on Cloudflare Workers and its database on D1. GitHub Pages is appropriate for the research case study, not the operational backend.
+
+The release workflow is: complete P0/P1 foundations → configure separate staging/production resources and secrets → apply tracked migrations → build → deploy with the generated Worker configuration → run authenticated smoke/concurrency checks. The [architecture](docs/ARCHITECTURE.md) describes migration, rollback and restore requirements. The `start` script previews locally; it does not publish a Worker.
+
+## Next development milestone
+
+Begin with **P0 and P1** in the [implementation plan](docs/IMPLEMENTATION_PLAN.md): repeatable migration/CI setup, account boundaries, canonical room/time identities and atomic bookings. Then connect the four MVP journeys before adding the rest of V1.

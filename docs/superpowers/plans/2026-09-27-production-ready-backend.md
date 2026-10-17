@@ -1,5 +1,7 @@
 # Production-Ready Backend Implementation Plan
 
+> **Historical plan — superseded 2026-10-04.** Follow the current [implementation plan](../../IMPLEMENTATION_PLAN.md), [PRD](../../PRD.md) and [architecture](../../ARCHITECTURE.md). Earlier task checkboxes and production-readiness assumptions below are retained as historical context, not current completion evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a production-ready, university-grade backend for Practice Ready using Cloudflare D1 (SQLite) and Drizzle ORM on Cloudflare Workers (Vinext/Next.js App Router), including edge authentication, atomic booking conflict prevention, full REST APIs, university seed data, frontend data integration with 100% design preservation, and removal of `.kiro/` generator files.

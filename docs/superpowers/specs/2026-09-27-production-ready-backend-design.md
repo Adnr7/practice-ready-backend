@@ -1,5 +1,7 @@
 # Production-Ready Backend System Specification for Practice Ready
 
+> **Historical design — superseded 2026-10-04.** Use the current [PRD](../../PRD.md), [architecture](../../ARCHITECTURE.md), [implementation plan](../../IMPLEMENTATION_PLAN.md) and [source audit](../../CURRENT_STATE.md). The original approval/status and production-readiness statements below record earlier intent; they are not verification of the current implementation.
+
 **Document Version:** 1.0.0  
 **Date:** 2026-09-27  
 **Status:** Approved for Implementation  
