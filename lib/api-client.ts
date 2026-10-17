@@ -6,6 +6,51 @@ import type { BookingPhase } from "@/lib/booking-engine";
  * Read failures return null; booking failures must never be treated as confirmation.
  */
 
+export type UserRole = "student" | "technician" | "admin";
+
+export interface UserProfile {
+  id: number;
+  email: string;
+  fullName: string;
+  studentId: string | null;
+  role: UserRole;
+  createdAt: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface RegisterPayload extends LoginPayload {
+  fullName: string;
+  studentId?: string;
+}
+
+export interface AuthResult {
+  success: boolean;
+  user: UserProfile | null;
+  error?: string;
+}
+
+export interface LogoutResult {
+  success: boolean;
+  error?: string;
+}
+
+async function readJson<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function responseError(response: Response, fallback: string): Promise<string> {
+  const data = await readJson<{ error?: string }>(response);
+  return data?.error ?? fallback;
+}
+
 export interface RoomData {
   id: number;
   name: string;
@@ -76,12 +121,91 @@ export interface EquipmentItem {
   notes?: string | null;
 }
 
+/** The current session, or null when the browser is anonymous. */
+export async function me(): Promise<UserProfile | null> {
+  try {
+    const res = await fetch("/api/auth/me", {
+      cache: "no-store",
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await readJson<{ user?: UserProfile | null }>(res);
+    return data?.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export const fetchCurrentUser = me;
+
+async function authenticate(
+  path: "/api/auth/login" | "/api/auth/register",
+  payload: LoginPayload | RegisterPayload,
+): Promise<AuthResult> {
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      return {
+        success: false,
+        user: null,
+        error: await responseError(res, "Authentication failed."),
+      };
+    }
+
+    const data = await readJson<{ user?: UserProfile | null }>(res);
+    if (!data?.user) {
+      return { success: false, user: null, error: "Authentication response was incomplete." };
+    }
+    return { success: true, user: data.user };
+  } catch {
+    return {
+      success: false,
+      user: null,
+      error: "Could not reach the authentication service.",
+    };
+  }
+}
+
+export function login(payload: LoginPayload): Promise<AuthResult> {
+  return authenticate("/api/auth/login", payload);
+}
+
+export function register(payload: RegisterPayload): Promise<AuthResult> {
+  return authenticate("/api/auth/register", payload);
+}
+
+export async function logout(): Promise<LogoutResult> {
+  try {
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      return {
+        success: false,
+        error: await responseError(res, "Could not sign out."),
+      };
+    }
+    const data = await readJson<{ success?: boolean }>(res);
+    return data?.success === false
+      ? { success: false, error: "Could not sign out." }
+      : { success: true };
+  } catch {
+    return { success: false, error: "Could not reach the authentication service." };
+  }
+}
+
 export async function fetchRooms(): Promise<RoomData[] | null> {
   try {
-    const res = await fetch("/api/rooms", { cache: "no-store" });
+    const res = await fetch("/api/rooms", { cache: "no-store", credentials: "include" });
     if (!res.ok) return null;
-    const data = (await res.json()) as { rooms?: RoomData[] };
-    return data.rooms ?? null;
+    const data = await readJson<{ rooms?: RoomData[] }>(res);
+    return data?.rooms ?? null;
   } catch {
     return null;
   }
@@ -102,9 +226,10 @@ export async function fetchAvailability(
   try {
     const res = await fetch(`/api/availability?roomId=${roomId}&date=${encodeURIComponent(date)}`, {
       cache: "no-store",
+      credentials: "include",
     });
     if (!res.ok) return null;
-    return (await res.json()) as AvailabilityResponse;
+    return await readJson<AvailabilityResponse>(res);
   } catch {
     return null;
   }
@@ -134,9 +259,10 @@ export async function fetchSchedule(
   try {
     const res = await fetch(`/api/schedule?date=${encodeURIComponent(date)}`, {
       cache: "no-store",
+      credentials: "include",
     });
     if (!res.ok) return null;
-    return (await res.json()) as ScheduleResponse;
+    return await readJson<ScheduleResponse>(res);
   } catch {
     return null;
   }
@@ -159,14 +285,14 @@ export async function fetchBookingStatus(
   try {
     const res = await fetch(
       `/api/bookings/status?ref=${encodeURIComponent(ref)}`,
-      { cache: "no-store" }
+      { cache: "no-store", credentials: "include" }
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as {
+    const data = await readJson<{
       booking?: Omit<BookingStatus, "phase">;
       phase?: BookingPhase;
-    };
-    if (!data.booking || !data.phase) return null;
+    }>(res);
+    if (!data?.booking || !data.phase) return null;
     return { ...data.booking, phase: data.phase };
   } catch {
     return null;
@@ -180,33 +306,32 @@ export async function fetchEquipmentInventory(
     const url = query
       ? `/api/equipment?query=${encodeURIComponent(query)}`
       : "/api/equipment";
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, { cache: "no-store", credentials: "include" });
     if (!res.ok) return null;
-    const data = (await res.json()) as { equipment?: EquipmentItem[] };
-    return data.equipment ?? null;
+    const data = await readJson<{ equipment?: EquipmentItem[] }>(res);
+    return data?.equipment ?? null;
   } catch {
     return null;
   }
 }
 
-export async function fetchRoomEquipment(
-  roomId: number
-): Promise<{
+export interface RoomEquipmentGroups {
   ready: EquipmentItem[];
   away: EquipmentItem[];
   attention: EquipmentItem[];
-} | null> {
+}
+
+export async function fetchRoomEquipment(
+  roomId: number
+): Promise<RoomEquipmentGroups | null> {
   try {
-    const res = await fetch(`/api/equipment/room/${roomId}`, { cache: "no-store" });
+    const res = await fetch(`/api/equipment/room/${roomId}`, {
+      cache: "no-store",
+      credentials: "include",
+    });
     if (!res.ok) return null;
-    const data = (await res.json()) as {
-      groups?: {
-        ready: EquipmentItem[];
-        away: EquipmentItem[];
-        attention: EquipmentItem[];
-      };
-    };
-    return data.groups ?? null;
+    const data = await readJson<{ groups?: RoomEquipmentGroups }>(res);
+    return data?.groups ?? null;
   } catch {
     return null;
   }
@@ -219,28 +344,29 @@ export async function submitBooking(
     const res = await fetch("/api/bookings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify(payload),
     });
 
-    const data = (await res.json()) as {
+    const data = await readJson<{
       booking?: BookingResult["booking"];
       conflictingSlots?: string[];
       error?: string;
-    };
+    }>(res);
 
-    if (res.status === 201 && data.booking?.bookingRef) {
+    if (res.status === 201 && data?.booking?.bookingRef) {
       return { success: true, booking: data.booking };
     }
 
     if (res.status === 409) {
       return {
         success: false,
-        conflictingSlots: data.conflictingSlots ?? [],
-        error: data.error,
+        conflictingSlots: data?.conflictingSlots ?? [],
+        error: data?.error,
       };
     }
 
-    return { success: false, error: data.error ?? "Failed to create booking" };
+    return { success: false, error: data?.error ?? "Failed to create booking" };
   } catch {
     return {
       success: false,
