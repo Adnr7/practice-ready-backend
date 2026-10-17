@@ -29,6 +29,13 @@
       "when": 1792240206645,
       "tag": "0003_amusing_nekra",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792239328433,
+      "tag": "0004_equipment_movements",
+      "breakpoints": true
     }
   ]
 }

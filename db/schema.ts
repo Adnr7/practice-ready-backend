@@ -46,6 +46,40 @@ export const equipment = sqliteTable("equipment", {
   index("idx_equipment_location").on(table.currentLocationId, table.status),
 ]);
 
+export const equipmentMovements = sqliteTable("equipment_movements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  equipmentId: integer("equipment_id").notNull().references(() => equipment.id),
+  movedByUserId: integer("moved_by_user_id").notNull().references(() => users.id),
+  fromLocationId: integer("from_location_id").notNull().references(() => locations.id),
+  toLocationId: integer("to_location_id").notNull().references(() => locations.id),
+  status: text("status", { enum: ["open", "returned", "corrected"] }).notNull().default("open"),
+  expectedReturnAt: text("expected_return_at"),
+  movedAt: text("moved_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  returnedAt: text("returned_at"),
+  returnedByUserId: integer("returned_by_user_id").references(() => users.id),
+  returnLocationId: integer("return_location_id").references(() => locations.id),
+  notes: text("notes"),
+  correctionReason: text("correction_reason"),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_equipment_movements_equipment").on(table.equipmentId, table.status),
+  index("idx_equipment_movements_user").on(table.movedByUserId, table.movedAt),
+  index("idx_equipment_movements_open").on(table.equipmentId, table.status),
+]);
+
+export const movementReturnEvents = sqliteTable("movement_return_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  movementId: integer("movement_id").notNull().references(() => equipmentMovements.id, { onDelete: "cascade" }),
+  actorUserId: integer("actor_user_id").notNull().references(() => users.id),
+  fromLocationId: integer("from_location_id").notNull().references(() => locations.id),
+  toLocationId: integer("to_location_id").notNull().references(() => locations.id),
+  eventType: text("event_type", { enum: ["return", "correction"] }).notNull(),
+  notes: text("notes"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_movement_return_events_movement").on(table.movementId, table.createdAt),
+]);
+
 export const timeSlots = sqliteTable("time_slots", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   roomId: integer("room_id").notNull().references(() => rooms.id),
