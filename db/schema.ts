@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -83,3 +83,44 @@ export const bookingSlots = sqliteTable("booking_slots", {
   bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
   timeSlotId: integer("time_slot_id").notNull().references(() => timeSlots.id),
 });
+
+
+export const reports = sqliteTable("reports", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  reference: text("reference").notNull().unique(),
+  reporterId: integer("reporter_id").notNull().references(() => users.id),
+  category: text("category", { enum: ["equipment", "room", "assistance"] }).notNull(),
+  equipmentId: integer("equipment_id").references(() => equipment.id),
+  roomId: integer("room_id").references(() => rooms.id),
+  locationId: integer("location_id").references(() => locations.id),
+  bookingId: integer("booking_id").references(() => bookings.id),
+  issueType: text("issue_type"),
+  description: text("description").notNull(),
+  status: text("status", {
+    enum: ["open", "acknowledged", "in_progress", "resolved", "closed", "reopened"],
+  }).notNull().default("open"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  resolvedAt: text("resolved_at"),
+}, (table) => [
+  index("idx_reports_reporter_created").on(table.reporterId, table.createdAt),
+  index("idx_reports_status_created").on(table.status, table.createdAt),
+  index("idx_reports_equipment").on(table.equipmentId),
+  index("idx_reports_room").on(table.roomId),
+  check("reports_category_check", sql`${table.category} IN ('equipment', 'room', 'assistance')`),
+  check("reports_status_check", sql`${table.status} IN ('open', 'acknowledged', 'in_progress', 'resolved', 'closed', 'reopened')`),
+]);
+
+export const reportUpdates = sqliteTable("report_updates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  reportId: integer("report_id").notNull().references(() => reports.id, { onDelete: "cascade" }),
+  authorId: integer("author_id").notNull().references(() => users.id),
+  status: text("status", {
+    enum: ["open", "acknowledged", "in_progress", "resolved", "closed", "reopened"],
+  }),
+  message: text("message"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_report_updates_report_created").on(table.reportId, table.createdAt),
+  check("report_updates_status_check", sql`${table.status} IS NULL OR ${table.status} IN ('open', 'acknowledged', 'in_progress', 'resolved', 'closed', 'reopened')`),
+]);

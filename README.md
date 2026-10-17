@@ -187,6 +187,10 @@ This table describes **current code**, not the proposed final contract. Response
 | PATCH | `/api/equipment/:id` | Technician/admin condition/location update |
 | GET | `/api/schedule?date=` | Public room schedule for the operational day, including booked display names |
 | POST | `/api/seed` | Controlled seed using an admin session or configured bearer token |
+| POST | `/api/reports` | Authenticated student/staff report or FTS assistance request; returns a report reference |
+| GET | `/api/reports` | Authenticated current-user report list |
+| GET | `/api/reports/:id` | Authenticated owner or staff report detail with update history |
+| PATCH | `/api/reports/:id` | Technician/admin status and message update |
 
 Rescheduling, usage logs, repair tracking, suitability, reports, support requests and movement history require new endpoints/workflows. See the [target API design](docs/ARCHITECTURE.md).
 
