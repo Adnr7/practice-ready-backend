@@ -449,9 +449,10 @@ async function mutateReservation(
   id: number,
   method: "DELETE" | "PATCH",
   body?: Record<string, unknown>,
+  suffix = "",
 ): Promise<ReservationMutationResult> {
   try {
-    const res = await fetch(`/api/bookings/${id}`, {
+    const res = await fetch(`/api/bookings/${id}${suffix}`, {
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       credentials: "include",
@@ -474,7 +475,7 @@ export function rescheduleReservation(
   id: number,
   payload: { roomId: number; date: string; startTime: string; endTime: string; version: number; reason?: string },
 ): Promise<ReservationMutationResult> {
-  return mutateReservation(id, "PATCH", payload);
+  return mutateReservation(id, "PATCH", payload, "/reschedule");
 }
 
 export async function endReservationSession(
