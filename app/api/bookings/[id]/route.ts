@@ -1,76 +1,126 @@
 import { env } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bookings } from "@/db/schema";
-import { cancelStoredBooking } from "@/lib/booking-store";
 import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
-import { getInstitutionNow, isStartInPast } from "@/lib/booking-engine";
+import {
+  bookingErrorResponse,
+  cancelBooking,
+  getBookingView,
+  parseBookingId,
+  parseVersion,
+  rescheduleBooking,
+  type BookingActor,
+} from "@/lib/booking-lifecycle";
 
-export async function DELETE(
+function authRequired(): Response {
+  return Response.json({ error: "Authentication required." }, { status: 401 });
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown> | Response> {
+  try {
+    const value = await request.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return Response.json({ error: "Request body must be a JSON object." }, { status: 400 });
+    }
+    return value as Record<string, unknown>;
+  } catch {
+    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
+}
+
+function actorFromSession(session: NonNullable<Awaited<ReturnType<typeof getSessionFromRequest>>>): BookingActor {
+  return { userId: session.userId, role: session.role };
+}
+
+export async function GET(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     configureAuthSecret(env.AUTH_SECRET);
-    const { id: idParam } = await params;
-    const id = Number(idParam);
-
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      return Response.json(
-        { error: "Booking ID must be a positive integer." },
-        { status: 400 }
-      );
-    }
-
     const session = await getSessionFromRequest(request);
-    const db = getDb();
-
-    const [booking] = await db
-      .select()
-      .from(bookings)
-      .where(eq(bookings.id, id))
-      .limit(1);
-
-    if (!booking) {
-      return Response.json({ error: "Booking not found." }, { status: 404 });
+    if (!session) return authRequired();
+    const bookingId = parseBookingId((await params).id);
+    const booking = await getBookingView(getDb().$client, bookingId);
+    if (!booking) return Response.json({ error: "Booking not found." }, { status: 404 });
+    const actor = actorFromSession(session);
+    if (actor.role === "student" && booking.userId !== actor.userId) {
+      return Response.json({ error: "Forbidden: You do not have access to this booking." }, { status: 403 });
     }
+    return Response.json({ booking });
+  } catch (error) {
+    return bookingErrorResponse(error);
+  }
+}
 
-    // Verify ownership or staff permissions
-    const isOwner = session && booking.userId === session.userId;
-    const isStaff = session && (session.role === "admin" || session.role === "technician");
-    if (!isOwner && !isStaff) {
-      return Response.json(
-        { error: "Forbidden: You do not have permission to cancel this booking." },
-        { status: 403 }
-      );
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    configureAuthSecret(env.AUTH_SECRET);
+    const session = await getSessionFromRequest(request);
+    if (!session) return authRequired();
+    const body = await readJson(request);
+    if (body instanceof Response) return body;
+    const bookingId = parseBookingId((await params).id);
+    const roomId = Number(body.roomId);
+    const date = typeof body.date === "string" ? body.date.trim() : "";
+    const startTime = typeof body.startTime === "string" ? body.startTime.trim() : "";
+    const endTime = typeof body.endTime === "string" ? body.endTime.trim() : "";
+    if (!Number.isSafeInteger(roomId) || roomId <= 0 || !date || !startTime || !endTime) {
+      return Response.json({ error: "roomId, date, startTime, and endTime are required." }, { status: 400 });
     }
+    const reason = typeof body.reason === "string" ? body.reason : undefined;
+    const version = parseVersion(body.version);
+    const booking = await rescheduleBooking(getDb().$client, {
+      bookingId,
+      actor: actorFromSession(session),
+      roomId,
+      date,
+      startTime,
+      endTime,
+      version,
+      reason,
+    });
+    return Response.json({ booking });
+  } catch (error) {
+    return bookingErrorResponse(error);
+  }
+}
 
-    if (booking.status === "cancelled") {
-      return Response.json(
-        { message: "Booking is already cancelled." },
-        { status: 200 }
-      );
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    configureAuthSecret(env.AUTH_SECRET);
+    const session = await getSessionFromRequest(request);
+    if (!session) return authRequired();
+    const bookingId = parseBookingId((await params).id);
+    let reason: string | undefined;
+    let version: number | undefined;
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = await readJson(request);
+      if (body instanceof Response) return body;
+      reason = typeof body.reason === "string" ? body.reason : undefined;
+      version = body.version === undefined ? undefined : parseVersion(body.version);
     }
-
-    // Policy: reservations may only be cancelled before their start time.
-    if (isStartInPast(booking.date, booking.startTime, getInstitutionNow())) {
-      return Response.json(
-        {
-          error:
-            "This reservation has already started and can no longer be cancelled.",
-        },
-        { status: 409 }
-      );
+    const result = await cancelBooking(getDb().$client, {
+      bookingId,
+      actor: actorFromSession(session),
+      reason,
+      version,
+    });
+    if (result.alreadyCancelled) {
+      return Response.json({ booking: result.booking, message: "Booking is already cancelled." });
     }
-
-    await cancelStoredBooking(db.$client, id);
-
     return Response.json({
       success: true,
+      booking: result.booking,
       message: "Booking successfully cancelled and time slots have been released.",
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return Response.json({ error: message }, { status: 500 });
+    return bookingErrorResponse(error);
   }
 }

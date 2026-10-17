@@ -104,6 +104,42 @@ export interface BookingResult {
   error?: string;
 }
 
+export interface ReservationData {
+  id: number;
+  bookingRef: string;
+  userId: number | null;
+  guestStudentName?: string | null;
+  guestStudentId?: string | null;
+  roomId: number;
+  roomName?: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  status: "confirmed" | "cancelled" | "completed";
+  phase: BookingPhase;
+  version: number;
+  sessionEndedAt?: string | null;
+  cancelledAt?: string | null;
+  cancellationReason?: string | null;
+  createdAt: string;
+}
+
+export interface EquipmentUsageData {
+  id: number;
+  bookingId: number;
+  equipmentId: number;
+  actorUserId: number;
+  equipmentLabel: string;
+  equipmentCode: string;
+  observedLocationId: number | null;
+  observedLocationName: string | null;
+  observedCondition: string;
+  observedStatus: string;
+  observedAt: string;
+  createdAt: string;
+}
+
 export interface EquipmentItem {
   id: number;
   equipmentId: string;
@@ -372,5 +408,122 @@ export async function submitBooking(
       success: false,
       error: "Could not confirm the reservation. Check the Room Schedule before retrying; the request may have reached the server.",
     };
+  }
+}
+
+export async function fetchReservations(
+  filter: "upcoming" | "active" | "past" | "all" = "all",
+): Promise<ReservationData[] | null> {
+  try {
+    const res = await fetch(`/api/bookings?filter=${encodeURIComponent(filter)}`, {
+      cache: "no-store",
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await readJson<{ bookings?: ReservationData[] }>(res);
+    return data?.bookings ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchReservation(id: number): Promise<ReservationData | null> {
+  try {
+    const res = await fetch(`/api/bookings/${id}`, { cache: "no-store", credentials: "include" });
+    if (!res.ok) return null;
+    const data = await readJson<{ booking?: ReservationData }>(res);
+    return data?.booking ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReservationMutationResult {
+  success: boolean;
+  booking?: ReservationData;
+  alreadyEnded?: boolean;
+  error?: string;
+}
+
+async function mutateReservation(
+  id: number,
+  method: "DELETE" | "PATCH",
+  body?: Record<string, unknown>,
+): Promise<ReservationMutationResult> {
+  try {
+    const res = await fetch(`/api/bookings/${id}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      credentials: "include",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await readJson<{ booking?: ReservationData; error?: string }>(res);
+    return res.ok
+      ? { success: true, booking: data?.booking }
+      : { success: false, error: data?.error ?? "Reservation update failed." };
+  } catch {
+    return { success: false, error: "Could not reach the reservation service." };
+  }
+}
+
+export function cancelReservation(id: number, version?: number): Promise<ReservationMutationResult> {
+  return mutateReservation(id, "DELETE", version === undefined ? undefined : { version });
+}
+
+export function rescheduleReservation(
+  id: number,
+  payload: { roomId: number; date: string; startTime: string; endTime: string; version: number; reason?: string },
+): Promise<ReservationMutationResult> {
+  return mutateReservation(id, "PATCH", payload);
+}
+
+export async function endReservationSession(
+  id: number,
+  version?: number,
+): Promise<ReservationMutationResult> {
+  try {
+    const res = await fetch(`/api/bookings/${id}/end-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(version === undefined ? {} : { version }),
+    });
+    const data = await readJson<{ booking?: ReservationData; alreadyEnded?: boolean; error?: string }>(res);
+    return res.ok
+      ? { success: true, booking: data?.booking, alreadyEnded: data?.alreadyEnded }
+      : { success: false, error: data?.error ?? "Could not end the active session." };
+  } catch {
+    return { success: false, error: "Could not reach the reservation service." };
+  }
+}
+
+export async function fetchSessionEquipmentUsage(id: number): Promise<EquipmentUsageData[] | null> {
+  try {
+    const res = await fetch(`/api/bookings/${id}/equipment-usage`, { cache: "no-store", credentials: "include" });
+    if (!res.ok) return null;
+    const data = await readJson<{ usage?: EquipmentUsageData[] }>(res);
+    return data?.usage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function submitSessionEquipmentUsage(
+  id: number,
+  equipmentIds: number[],
+): Promise<{ success: boolean; usage?: EquipmentUsageData[]; replayed?: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/bookings/${id}/equipment-usage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ equipmentIds }),
+    });
+    const data = await readJson<{ usage?: EquipmentUsageData[]; replayed?: boolean; error?: string }>(res);
+    return res.ok
+      ? { success: true, usage: data?.usage, replayed: data?.replayed }
+      : { success: false, error: data?.error ?? "Could not save equipment use." };
+  } catch {
+    return { success: false, error: "Could not reach the session service." };
   }
 }

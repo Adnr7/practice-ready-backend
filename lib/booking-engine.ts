@@ -124,10 +124,11 @@ export function deriveBookingPhase(
   startTime: string,
   endTime: string,
   status: "confirmed" | "cancelled" | "completed",
-  now: InstitutionNow = getInstitutionNow()
+  now: InstitutionNow = getInstitutionNow(),
+  sessionEndedAt?: string | null,
 ): BookingPhase {
   if (status === "cancelled") return "cancelled";
-  if (status === "completed") return "completed";
+  if (status === "completed" || sessionEndedAt) return "completed";
   if (isBookingElapsed(date, endTime, now)) return "completed";
   if (isStartInPast(date, startTime, now)) return "in_progress";
   return "upcoming";

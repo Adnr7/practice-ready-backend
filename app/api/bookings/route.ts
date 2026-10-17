@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bookings, rooms, timeSlots } from "@/db/schema";
-import { reserveSlots, isBookingReferenceConflict, type StoredBooking } from "@/lib/booking-store";
+import { reserveSlots, isBookingReferenceConflict, isBookingClaimConflict, type StoredBooking } from "@/lib/booking-store";
 import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
 import {
   generateBookingReference,
@@ -10,6 +10,7 @@ import {
   getInstitutionNow,
   isBookingElapsed,
   validateBookingRequest,
+  deriveBookingPhase,
 } from "@/lib/booking-engine";
 
 export async function GET(request: Request) {
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     configureAuthSecret(env.AUTH_SECRET);
     const session = await getSessionFromRequest(request);
     const { searchParams } = new URL(request.url);
-    const filter = searchParams.get("filter"); // upcoming | past | all
+    const filter = searchParams.get("filter"); // upcoming | active | past | all
 
     const db = getDb();
 
@@ -42,6 +43,10 @@ export async function GET(request: Request) {
         endTime: bookings.endTime,
         durationMinutes: bookings.durationMinutes,
         status: bookings.status,
+        version: bookings.version,
+        sessionEndedAt: bookings.sessionEndedAt,
+        cancelledAt: bookings.cancelledAt,
+        cancellationReason: bookings.cancellationReason,
         createdAt: bookings.createdAt,
       })
       .from(bookings)
@@ -68,9 +73,14 @@ export async function GET(request: Request) {
         .where(inArray(bookings.id, staleIds));
     }
 
-    const reconciled = allBookings.map((b) =>
-      staleIds.includes(b.id) ? { ...b, status: "completed" as const } : b
-    );
+    const reconciled = allBookings.map((b) => {
+      const status = staleIds.includes(b.id) ? "completed" as const : b.status;
+      return {
+        ...b,
+        status,
+        phase: deriveBookingPhase(b.date, b.startTime, b.endTime, status, now, b.sessionEndedAt),
+      };
+    });
 
     if (filter === "upcoming") {
       return Response.json({
@@ -80,8 +90,12 @@ export async function GET(request: Request) {
 
     if (filter === "past") {
       return Response.json({
-        bookings: reconciled.filter((b) => b.status !== "confirmed"),
+        bookings: reconciled.filter((b) => b.phase === "completed" || b.phase === "cancelled"),
       });
+    }
+
+    if (filter === "active") {
+      return Response.json({ bookings: reconciled.filter((b) => b.phase === "in_progress") });
     }
 
     return Response.json({ bookings: reconciled });
@@ -167,7 +181,7 @@ export async function POST(request: Request) {
           durationMinutes: validation.durationMinutes!,
         }, validation.requiredSlots);
       } catch (error) {
-        if (isBookingReferenceConflict(error) && attempt < 4) continue;
+        if ((isBookingReferenceConflict(error) || isBookingClaimConflict(error)) && attempt < 4) continue;
         throw error;
       }
 

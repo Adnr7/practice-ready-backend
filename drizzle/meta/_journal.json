@@ -36,6 +36,13 @@
       "when": 1792239328433,
       "tag": "0004_equipment_movements",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792240300000,
+      "tag": "0005_reservation_lifecycle",
+      "breakpoints": true
     }
   ]
 }

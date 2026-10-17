@@ -107,6 +107,12 @@ export const bookings = sqliteTable("bookings", {
   endTime: text("end_time").notNull(), // HH:MM
   durationMinutes: integer("duration_minutes").notNull(),
   status: text("status", { enum: ["confirmed", "cancelled", "completed"] }).notNull().default("confirmed"),
+  version: integer("version").notNull().default(1),
+  mutationToken: text("mutation_token"),
+  sessionEndedAt: text("session_ended_at"),
+  cancelledAt: text("cancelled_at"),
+  cancelledByUserId: integer("cancelled_by_user_id").references(() => users.id),
+  cancellationReason: text("cancellation_reason"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
   index("idx_bookings_user").on(table.userId, table.date),
@@ -118,6 +124,50 @@ export const bookingSlots = sqliteTable("booking_slots", {
   bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
   timeSlotId: integer("time_slot_id").notNull().references(() => timeSlots.id),
 });
+
+/** Active room occupancy. Historical booking_slots links are retained separately. */
+export const bookingClaims = sqliteTable("booking_claims", {
+  timeSlotId: integer("time_slot_id").primaryKey().references(() => timeSlots.id),
+  bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
+}, (table) => [
+  index("idx_booking_claims_booking").on(table.bookingId),
+]);
+
+export const bookingHistory = sqliteTable("booking_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
+  actorUserId: integer("actor_user_id").references(() => users.id),
+  action: text("action", { enum: ["created", "rescheduled", "cancelled", "session_ended"] }).notNull(),
+  previousRoomId: integer("previous_room_id"),
+  previousDate: text("previous_date"),
+  previousStartTime: text("previous_start_time"),
+  previousEndTime: text("previous_end_time"),
+  newRoomId: integer("new_room_id"),
+  newDate: text("new_date"),
+  newStartTime: text("new_start_time"),
+  newEndTime: text("new_end_time"),
+  reason: text("reason"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_booking_history_booking").on(table.bookingId, table.createdAt),
+]);
+
+export const sessionEquipmentUsage = sqliteTable("session_equipment_usage", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
+  equipmentId: integer("equipment_id").notNull().references(() => equipment.id),
+  actorUserId: integer("actor_user_id").notNull().references(() => users.id),
+  equipmentLabel: text("equipment_label").notNull(),
+  equipmentCode: text("equipment_code").notNull(),
+  observedLocationId: integer("observed_location_id").references(() => locations.id),
+  observedCondition: text("observed_condition").notNull(),
+  observedStatus: text("observed_status").notNull(),
+  observedAt: text("observed_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_session_equipment_usage_unique").on(table.bookingId, table.equipmentId),
+  index("idx_session_equipment_usage_booking").on(table.bookingId, table.createdAt),
+]);
 
 
 export const reports = sqliteTable("reports", {

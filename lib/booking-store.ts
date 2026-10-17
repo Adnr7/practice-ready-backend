@@ -16,6 +16,13 @@ export interface StoredBooking extends BookingInsert {
   createdAt: string;
 }
 
+async function supportsBookingClaims(db: D1Database): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'booking_claims' LIMIT 1")
+    .first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
 /**
  * D1 supports atomic batch(), not interactive BEGIN/COMMIT transactions.
  * The availability check is part of the INSERT, so two concurrent requests
@@ -27,9 +34,9 @@ export async function reserveSlots(
   booking: BookingInsert,
   requiredSlots: string[],
 ): Promise<StoredBooking | null> {
+  const hasClaims = await supportsBookingClaims(db);
   const placeholders = requiredSlots.map(() => "?").join(", ");
-  const [result] = await db.batch<StoredBooking>([
-    db.prepare(`
+  const bookingInsert = db.prepare(`
       INSERT INTO bookings
         (booking_ref, user_id, guest_student_name, guest_student_id,
          room_id, date, start_time, end_time, duration_minutes, status)
@@ -53,36 +60,60 @@ export async function reserveSlots(
       booking.guestStudentId, booking.roomId, booking.date, booking.startTime,
       booking.endTime, booking.durationMinutes,
       booking.roomId, booking.date, ...requiredSlots, requiredSlots.length,
-    ),
-    db.prepare(`
+    );
+  const claimInsert = hasClaims ? db.prepare(`
+      INSERT INTO booking_claims (time_slot_id, booking_id)
+      SELECT s.id, b.id FROM bookings b JOIN time_slots s
+        ON s.room_id = b.room_id AND s.date = b.date
+       WHERE b.booking_ref = ? AND s.start_time IN (${placeholders})
+         AND s.status = 'available'
+         AND NOT EXISTS (
+           SELECT 1 FROM booking_claims existing
+           WHERE existing.time_slot_id = s.id
+         )
+         AND (SELECT COUNT(DISTINCT candidate.start_time) FROM time_slots candidate
+              WHERE candidate.room_id = b.room_id AND candidate.date = b.date
+                AND candidate.start_time IN (${placeholders})
+                AND candidate.status = 'available'
+                AND NOT EXISTS (
+                  SELECT 1 FROM booking_claims occupied
+                  WHERE occupied.time_slot_id = candidate.id
+                )) = ?
+         AND changes() = 1
+    `).bind(booking.bookingRef, ...requiredSlots, ...requiredSlots, requiredSlots.length) : null;
+  const bookingSlotInsert = db.prepare(`
      INSERT INTO booking_slots (booking_id, time_slot_id)
-     SELECT b.id, s.id FROM bookings b JOIN time_slots s
-       ON s.room_id = b.room_id AND s.date = b.date
-      WHERE b.booking_ref = ? AND s.start_time IN (${placeholders})
-        AND s.status = 'available'
-        AND NOT EXISTS (
-          SELECT 1 FROM time_slots occupied
-          WHERE occupied.room_id = s.room_id
-            AND occupied.date = s.date
-            AND occupied.start_time = s.start_time
-            AND occupied.status <> 'available'
-        )
-        AND s.id = (
-          SELECT MIN(candidate.id) FROM time_slots candidate
-          WHERE candidate.room_id = b.room_id
-            AND candidate.date = b.date
-            AND candidate.start_time = s.start_time
-            AND candidate.status = 'available'
-            AND NOT EXISTS (
-              SELECT 1 FROM time_slots occupied
-              WHERE occupied.room_id = candidate.room_id
-                AND occupied.date = candidate.date
-                AND occupied.start_time = candidate.start_time
-                AND occupied.status <> 'available'
-            )
-        )
-        AND changes() = 1
-    `).bind(booking.bookingRef, ...requiredSlots),
+      SELECT b.id, s.id FROM bookings b JOIN time_slots s
+        ON s.room_id = b.room_id AND s.date = b.date
+       WHERE b.booking_ref = ? AND s.start_time IN (${placeholders})
+         AND s.status = 'available'
+         AND NOT EXISTS (
+           SELECT 1 FROM time_slots occupied
+           WHERE occupied.room_id = s.room_id
+             AND occupied.date = s.date
+             AND occupied.start_time = s.start_time
+             AND occupied.status <> 'available'
+         )
+         AND s.id = (
+           SELECT MIN(candidate.id) FROM time_slots candidate
+           WHERE candidate.room_id = b.room_id
+             AND candidate.date = b.date
+             AND candidate.start_time = s.start_time
+             AND candidate.status = 'available'
+             AND NOT EXISTS (
+               SELECT 1 FROM time_slots occupied
+               WHERE occupied.room_id = candidate.room_id
+                 AND occupied.date = candidate.date
+                 AND occupied.start_time = candidate.start_time
+                 AND occupied.status <> 'available'
+             )
+         )
+         AND changes() ${hasClaims ? "> 0" : "= 1"}
+    `).bind(booking.bookingRef, ...requiredSlots);
+  const statements = [
+    bookingInsert,
+    ...(claimInsert ? [claimInsert] : []),
+    bookingSlotInsert,
     db.prepare(`
       UPDATE time_slots SET status = 'booked'
       WHERE changes() > 0 AND id IN (
@@ -90,7 +121,8 @@ export async function reserveSlots(
         JOIN bookings b ON b.id = bs.booking_id WHERE b.booking_ref = ?
       )
     `).bind(booking.bookingRef),
-  ]);
+  ];
+  const [result] = await db.batch<StoredBooking>(statements);
   return result.results[0] ?? null;
 }
 
@@ -100,8 +132,31 @@ export function isBookingReferenceConflict(error: unknown): boolean {
     isBookingReferenceConflict(error.cause);
 }
 
+export function isBookingClaimConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /unique constraint failed: booking_claims\.time_slot_id/i.test(error.message) ||
+    isBookingClaimConflict(error.cause);
+}
+
 /** Release only slots with no remaining confirmed owner, in the same D1 batch. */
 export async function cancelStoredBooking(db: D1Database, bookingId: number): Promise<void> {
+  if (await supportsBookingClaims(db)) {
+    await db.batch([
+      db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'").bind(bookingId),
+      db.prepare("DELETE FROM booking_claims WHERE booking_id = ?").bind(bookingId),
+      db.prepare(`
+        UPDATE time_slots SET status = 'available'
+        WHERE status = 'booked'
+          AND id IN (SELECT time_slot_id FROM booking_slots WHERE booking_id = ?)
+          AND NOT EXISTS (SELECT 1 FROM booking_claims WHERE booking_claims.time_slot_id = time_slots.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM booking_slots bs JOIN bookings b ON bs.booking_id = b.id
+            WHERE bs.time_slot_id = time_slots.id AND b.status = 'confirmed'
+          )
+      `).bind(bookingId),
+    ]);
+    return;
+  }
   await db.batch([
     db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'").bind(bookingId),
     db.prepare(`
