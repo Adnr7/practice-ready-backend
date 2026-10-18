@@ -20,6 +20,10 @@ const migrations = [
   "0001_new_the_hood.sql",
   "0002_open_layla_miller.sql",
   "0003_amusing_nekra.sql",
+  "0004_equipment_movements.sql",
+  "0005_reservation_lifecycle.sql",
+  "0006_room_readiness.sql",
+  "0007_frontend_workflows.sql",
 ];
 
 let emulator;

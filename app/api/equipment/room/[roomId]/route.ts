@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@/db";
 import { equipment, locations, rooms } from "@/db/schema";
@@ -52,7 +52,7 @@ export async function GET(
       .from(equipment)
       .leftJoin(currentLoc, eq(equipment.currentLocationId, currentLoc.id))
       .leftJoin(defaultLoc, eq(equipment.defaultLocationId, defaultLoc.id))
-      .where(eq(equipment.defaultRoomId, roomId))
+      .where(and(eq(equipment.defaultRoomId, roomId), eq(equipment.archived, false)))
       .orderBy(equipment.type, equipment.name);
 
     // Group by readiness category

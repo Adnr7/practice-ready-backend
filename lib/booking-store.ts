@@ -1,3 +1,5 @@
+import { runIdempotentBatch, type IdempotencyRequest } from "./idempotency.ts";
+
 export interface BookingInsert {
   bookingRef: string;
   userId: number | null;
@@ -8,6 +10,7 @@ export interface BookingInsert {
   startTime: string;
   endTime: string;
   durationMinutes: number;
+  policyVersion?: string | null;
 }
 
 export interface StoredBooking extends BookingInsert {
@@ -23,24 +26,27 @@ async function supportsBookingClaims(db: D1Database): Promise<boolean> {
   return Boolean(row?.present);
 }
 
-/**
- * D1 supports atomic batch(), not interactive BEGIN/COMMIT transactions.
- * The availability check is part of the INSERT, so two concurrent requests
- * cannot both pass it before claiming the same slots. All three writes either
- * commit together or roll back together.
- */
-export async function reserveSlots(
+async function supportsBookingPolicy(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'policy_version' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
+async function reservationStatements(
   db: D1Database,
   booking: BookingInsert,
   requiredSlots: string[],
-): Promise<StoredBooking | null> {
+): Promise<{ statements: D1PreparedStatement[]; hasPolicy: boolean }> {
   const hasClaims = await supportsBookingClaims(db);
+  const hasPolicy = await supportsBookingPolicy(db);
   const placeholders = requiredSlots.map(() => "?").join(", ");
+  const policyColumns = hasPolicy ? ", policy_version" : "";
+  const policyValue = hasPolicy ? ", ?" : "";
+  const policySelect = hasPolicy ? ", policy_version AS policyVersion" : "";
   const bookingInsert = db.prepare(`
       INSERT INTO bookings
         (booking_ref, user_id, guest_student_name, guest_student_id,
-         room_id, date, start_time, end_time, duration_minutes, status)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed'
+          room_id, date, start_time, end_time, duration_minutes${policyColumns}, status)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?${policyValue}, 'confirmed'
        WHERE (SELECT COUNT(DISTINCT slot.start_time) FROM time_slots slot
          WHERE slot.room_id = ? AND slot.date = ? AND slot.start_time IN (${placeholders})
            AND slot.status = 'available'
@@ -54,11 +60,12 @@ export async function reserveSlots(
       RETURNING id, booking_ref AS bookingRef, user_id AS userId,
         guest_student_name AS guestStudentName, guest_student_id AS guestStudentId,
         room_id AS roomId, date, start_time AS startTime, end_time AS endTime,
-        duration_minutes AS durationMinutes, status, created_at AS createdAt
+         duration_minutes AS durationMinutes${policySelect}, status, created_at AS createdAt
     `).bind(
       booking.bookingRef, booking.userId, booking.guestStudentName,
       booking.guestStudentId, booking.roomId, booking.date, booking.startTime,
-      booking.endTime, booking.durationMinutes,
+       booking.endTime, booking.durationMinutes,
+       ...(hasPolicy ? [booking.policyVersion ?? null] : []),
       booking.roomId, booking.date, ...requiredSlots, requiredSlots.length,
     );
   const claimInsert = hasClaims ? db.prepare(`
@@ -122,8 +129,41 @@ export async function reserveSlots(
       )
     `).bind(booking.bookingRef),
   ];
+  return { statements, hasPolicy };
+}
+
+/** Availability checks and all slot/claim writes commit in one D1 batch. */
+export async function reserveSlots(
+  db: D1Database,
+  booking: BookingInsert,
+  requiredSlots: string[],
+): Promise<StoredBooking | null> {
+  const { statements } = await reservationStatements(db, booking, requiredSlots);
   const [result] = await db.batch<StoredBooking>(statements);
   return result.results[0] ?? null;
+}
+
+/** Persist the exact creation response in the same transaction as the slots. */
+export async function reserveSlotsIdempotently(
+  db: D1Database,
+  booking: BookingInsert,
+  requiredSlots: string[],
+  request: IdempotencyRequest,
+  roomName: string,
+): Promise<Response | null> {
+  const { statements, hasPolicy } = await reservationStatements(db, booking, requiredSlots);
+  // Record immediately after the booking INSERT, so changes() identifies that
+  // insert rather than a later slot write (or an existing colliding reference).
+  // The strict replay INSERT preserves changes() = 1/0 for the claim/link chain.
+  return runIdempotentBatch(db, request, [statements[0]], {
+    sql: `SELECT json_object('booking', json_object(
+      'id', id, 'bookingRef', booking_ref, 'roomId', room_id, 'roomName', ?,
+      'date', date, 'startTime', start_time, 'endTime', end_time,
+      'durationMinutes', duration_minutes, ${hasPolicy ? "'policyVersion', policy_version," : ""}
+      'guestStudentName', guest_student_name, 'status', status, 'createdAt', created_at
+    )) AS response_body FROM bookings WHERE booking_ref = ? AND changes() = 1`,
+    bindings: [roomName, booking.bookingRef],
+  }, statements.slice(1));
 }
 
 export function isBookingReferenceConflict(error: unknown): boolean {

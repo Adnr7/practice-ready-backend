@@ -3,6 +3,13 @@
  * Fully compatible with Cloudflare Workers runtime and Node 22+.
  */
 
+import {
+  getStoredSession,
+  isStoredSessionToken,
+  revokeStoredSession,
+  SESSION_MAX_AGE_SECONDS,
+} from "./session-store.ts";
+
 export interface SessionPayload {
   userId: number;
   email: string;
@@ -10,6 +17,36 @@ export interface SessionPayload {
   fullName: string;
   role: "student" | "technician" | "admin";
   exp: number; // Unix epoch in seconds
+}
+
+export class AuthRequestError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code = "BODY_INVALID") {
+    super(message);
+    this.name = "AuthRequestError";
+    this.code = code;
+  }
+}
+
+export async function readAuthJson(request: Request): Promise<Record<string, unknown>> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    throw new AuthRequestError("Request body must be valid JSON.", "INVALID_JSON");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new AuthRequestError("Request body must be a JSON object.");
+  }
+  return body as Record<string, unknown>;
+}
+
+export function authErrorResponse(error: unknown): Response {
+  if (error instanceof AuthRequestError) {
+    return Response.json({ error: error.message, code: error.code }, { status: 400 });
+  }
+  return Response.json({ error: error instanceof Error ? error.message : "Internal server error" }, { status: 500 });
 }
 
 let configuredAuthSecret: string | undefined;
@@ -131,7 +168,7 @@ async function getHmacKey(secret: string): Promise<CryptoKey> {
 }
 
 /**
- * Generates an HMAC-SHA256 signed session token.
+ * Legacy HMAC utility. Signed tokens alone no longer authenticate requests.
  */
 export async function createSessionToken(
   payload: Omit<SessionPayload, "exp"> & { exp?: number },
@@ -158,7 +195,7 @@ export async function createSessionToken(
 }
 
 /**
- * Verifies an HMAC-SHA256 session token and checks its expiration.
+ * Verifies legacy HMAC claims only; this does not establish a DB-backed session.
  */
 export async function verifySessionToken(
   token: string
@@ -218,17 +255,35 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
 }
 
 export function createSessionCookie(token: string, secure = false): string {
-  return `pr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=86400`;
+  return `pr_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
 }
 
 export function createClearSessionCookie(secure = false): string {
   return `pr_session=; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=0`;
 }
 
-export async function getSessionFromRequest(request: Request): Promise<SessionPayload | null> {
-  const cookieHeader = request.headers.get("cookie");
-  const cookies = parseCookies(cookieHeader);
-  const token = cookies["pr_session"];
-  if (!token) return null;
-  return verifySessionToken(token);
+async function getSessionDatabase(customDb?: D1Database): Promise<D1Database> {
+  if (customDb) return customDb;
+  // Keep the Worker-only module out of pure Node crypto/cookie tests.
+  const { env } = await import("cloudflare:workers");
+  if (!env.DB) throw new Error("Cloudflare D1 binding `DB` is unavailable.");
+  return env.DB;
+}
+
+export async function getSessionFromRequest(request: Request, customDb?: D1Database): Promise<SessionPayload | null> {
+  const token = parseCookies(request.headers.get("cookie"))["pr_session"];
+  if (!token || !isStoredSessionToken(token)) return null;
+  try {
+    return await getStoredSession(await getSessionDatabase(customDb), token);
+  } catch {
+    // Missing bindings, migrations, or unavailable storage must never grant access.
+    return null;
+  }
+}
+
+export async function revokeSessionFromRequest(request: Request, customDb?: D1Database): Promise<void> {
+  const token = parseCookies(request.headers.get("cookie"))["pr_session"];
+  if (!token || !isStoredSessionToken(token)) return;
+  // Unlike reads, revocation failures must propagate so logout cannot claim success.
+  await revokeStoredSession(await getSessionDatabase(customDb), token);
 }

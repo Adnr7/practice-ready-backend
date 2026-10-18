@@ -24,7 +24,7 @@ describe("D1 atomic booking storage", () => {
       compatibilityDate: "2026-05-15", d1Databases: ["DB"],
     });
     db = await emulator.getD1Database("DB");
-    for (const file of ["0000_lush_misty_knight.sql", "0001_new_the_hood.sql"]) {
+    for (const file of ["0000_lush_misty_knight.sql", "0001_new_the_hood.sql", "0002_open_layla_miller.sql", "0003_amusing_nekra.sql", "0004_equipment_movements.sql", "0005_reservation_lifecycle.sql", "0006_room_readiness.sql", "0007_frontend_workflows.sql"]) {
       const migration = await readFile(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
       for (const sql of migration.split("--> statement-breakpoint").filter((sql) => sql.trim())) {
         await db.prepare(sql).run();

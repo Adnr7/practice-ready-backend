@@ -5,7 +5,9 @@ import {
   validateBookingRequest,
   type BookingPhase,
 } from "./booking-engine.ts";
+import { getBookingPolicy, getCurrentBookingPolicy } from "./booking-policy.ts";
 import { cancelStoredBooking } from "./booking-store.ts";
+import { operationalConflictResponse } from "./operational-conflicts.ts";
 
 export type BookingActor = {
   userId: number;
@@ -24,6 +26,7 @@ export type BookingRow = {
   startTime: string;
   endTime: string;
   durationMinutes: number;
+  policyVersion: string | null;
   status: "confirmed" | "cancelled" | "completed";
   version: number;
   sessionEndedAt: string | null;
@@ -55,6 +58,8 @@ export class BookingLifecycleError extends Error {
 }
 
 export function bookingErrorResponse(error: unknown): Response {
+  const conflict = operationalConflictResponse(error);
+  if (conflict) return conflict;
   if (error instanceof BookingLifecycleError) {
     return Response.json({ error: error.message, code: error.code, ...(error.details ? { details: error.details } : {}) }, { status: error.status });
   }
@@ -103,6 +108,7 @@ export async function getBookingRow(db: D1Database, bookingId: number): Promise<
       b.start_time AS startTime,
       b.end_time AS endTime,
       b.duration_minutes AS durationMinutes,
+      b.policy_version AS policyVersion,
       b.status,
       b.version,
       b.session_ended_at AS sessionEndedAt,
@@ -195,7 +201,8 @@ export async function rescheduleBooking(
     throw new BookingLifecycleError("This reservation changed. Refresh it before rescheduling.", 409, "BOOKING_VERSION_CONFLICT");
   }
 
-  const validation = validateBookingRequest({ date: input.date, startTime: input.startTime, endTime: input.endTime });
+  const policy = await getCurrentBookingPolicy(db);
+  const validation = validateBookingRequest({ date: input.date, startTime: input.startTime, endTime: input.endTime }, getInstitutionNow(), policy);
   if (!validation.valid || !validation.requiredSlots || !validation.durationMinutes) {
     throw new BookingLifecycleError(validation.error ?? "Invalid reschedule window.", 400, "BOOKING_WINDOW_INVALID");
   }
@@ -267,9 +274,9 @@ export async function rescheduleBooking(
     ),
     db.prepare(`
       UPDATE bookings
-      SET room_id = ?, date = ?, start_time = ?, end_time = ?, duration_minutes = ?, mutation_token = NULL
-      WHERE id = ? AND mutation_token = ?
-    `).bind(input.roomId, input.date, input.startTime, input.endTime, validation.durationMinutes, input.bookingId, token),
+       SET room_id = ?, date = ?, start_time = ?, end_time = ?, duration_minutes = ?, policy_version = ?, mutation_token = NULL
+       WHERE id = ? AND mutation_token = ?
+     `).bind(input.roomId, input.date, input.startTime, input.endTime, validation.durationMinutes, policy.version, input.bookingId, token),
     db.prepare(`
       UPDATE time_slots SET status = 'booked'
       WHERE id IN (SELECT time_slot_id FROM booking_claims WHERE booking_id = ?)
@@ -304,8 +311,20 @@ export async function cancelBooking(
   if (current.status !== "confirmed") {
     throw new BookingLifecycleError("This reservation can no longer be cancelled.", 409, "BOOKING_NOT_CANCELLABLE");
   }
-  if (isStartInPast(current.date, current.startTime, getInstitutionNow()) && !isStaff(input.actor)) {
+  const campusNow = getInstitutionNow();
+  if (isStartInPast(current.date, current.startTime, campusNow) && !isStaff(input.actor)) {
     throw new BookingLifecycleError("This reservation has already started and can no longer be cancelled.", 409, "BOOKING_CUTOFF");
+  }
+  if (!isStaff(input.actor)) {
+    const policy = current.policyVersion
+      ? ((await getBookingPolicy(db, current.policyVersion)) ?? (await getCurrentBookingPolicy(db)))
+      : await getCurrentBookingPolicy(db);
+    const [year, month, day] = current.date.split("-").map(Number);
+    const [hours, minutes] = current.startTime.split(":").map(Number);
+    const startEpoch = Date.UTC(year, month - 1, day, hours, minutes) - 330 * 60_000;
+    if (startEpoch - Date.now() < policy.cancellationCutoffMinutes * 60_000) {
+      throw new BookingLifecycleError("This reservation is within the cancellation cutoff window.", 409, "BOOKING_CUTOFF");
+    }
   }
   if (isStaff(input.actor) && (!input.reason || input.reason.trim().length < 5)) {
     throw new BookingLifecycleError("Staff cancellation requires a reason of at least 5 characters.", 400, "BOOKING_REASON_REQUIRED");

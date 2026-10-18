@@ -4,12 +4,13 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import {
   correctMovement,
-  createMovement,
+  createMovement as storeMovement,
   listMovements,
   MovementError,
   parseCreateMovementBody,
   returnMovement,
 } from "../lib/equipment-movements.ts";
+import { getInstitutionNow } from "../lib/booking-engine.ts";
 
 const require = createRequire(import.meta.url);
 const wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
@@ -23,7 +24,14 @@ async function applyMigrations(db) {
   for (const file of [
     "0000_lush_misty_knight.sql",
     "0001_new_the_hood.sql",
+    "0002_open_layla_miller.sql",
+    "0003_amusing_nekra.sql",
     "0004_equipment_movements.sql",
+    "0005_reservation_lifecycle.sql",
+    "0006_room_readiness.sql",
+    "0007_frontend_workflows.sql",
+    "0008_sessions.sql",
+    "0010_movement_permissions.sql",
   ]) {
     const migration = await readFile(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").filter((sql) => sql.trim())) {
@@ -35,6 +43,8 @@ async function applyMigrations(db) {
 describe("Persistent equipment movement workflow", () => {
   let emulator;
   let db;
+  let expectedReturnAt;
+  const createMovement = (client, input) => storeMovement(client, { bookingId: 1, expectedReturnAt, ...input });
 
   before(async () => {
     emulator = new Miniflare({
@@ -52,16 +62,26 @@ describe("Persistent equipment movement workflow", () => {
       db.prepare("INSERT INTO locations (id, code, name, type) VALUES (1, 'storage', 'Storage', 'storage')"),
       db.prepare("INSERT INTO locations (id, code, name, type) VALUES (2, 'mpr-2', 'MPR 2', 'room')"),
       db.prepare("INSERT INTO locations (id, code, name, type) VALUES (3, 'mpr-3', 'MPR 3', 'room')"),
-      db.prepare("INSERT INTO equipment (id, equipment_id, name, type, current_location_id, status) VALUES (1, 'KEY-01', 'Keyboard', 'keyboard', 1, 'ready')"),
+      db.prepare("INSERT INTO rooms (id, name, code, capacity, description, location_id) VALUES (1, 'MPR 1', 'mpr-1', 6, 'Practice room', 1)"),
+      db.prepare("INSERT INTO equipment (id, equipment_id, name, type, current_location_id, default_room_id, status) VALUES (1, 'KEY-01', 'Keyboard', 'keyboard', 1, 1, 'ready')"),
+      db.prepare("INSERT INTO movement_permissions (equipment_id, to_location_id, is_active, updated_by_user_id, reason) VALUES (1, 2, 1, 3, 'Approved test destination')"),
     ]);
   });
 
   after(async () => { await emulator?.dispose(); });
 
   beforeEach(async () => {
+    const current = getInstitutionNow();
+    const startMinutes = Math.max(0, Math.floor(current.minutes / 30) * 30 - 30);
+    const endMinutes = Math.min(1440, Math.floor(current.minutes / 30) * 30 + 60);
+    const time = (minutes) => `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    const end = Date.parse(`${current.date}T00:00:00Z`) + (endMinutes - 330) * 60_000;
+    expectedReturnAt = new Date(Math.min(Date.now() + 10 * 60_000, end - 1000)).toISOString();
     await db.batch([
       db.prepare("DELETE FROM movement_return_events"),
       db.prepare("DELETE FROM equipment_movements"),
+      db.prepare("DELETE FROM bookings"),
+      db.prepare("INSERT INTO bookings (id, booking_ref, user_id, room_id, date, start_time, end_time, duration_minutes) VALUES (1, 'PR-MOVEMENT', 1, 1, ?, ?, ?, ?)").bind(current.date, time(startMinutes), time(endMinutes), endMinutes - startMinutes),
       db.prepare("UPDATE equipment SET current_location_id = 1, status = 'ready' WHERE id = 1"),
       db.prepare("DROP TRIGGER IF EXISTS fail_movement_insert"),
       db.prepare("DROP TRIGGER IF EXISTS fail_return_event"),
@@ -73,7 +93,7 @@ describe("Persistent equipment movement workflow", () => {
       actor: student,
       equipmentId: 1,
       toLocationId: 2,
-      expectedReturnAt: "2099-01-01T10:00:00Z",
+      expectedReturnAt,
       notes: "Practice session",
     });
 
@@ -88,7 +108,7 @@ describe("Persistent equipment movement workflow", () => {
   it("rolls back the location update when movement history cannot be inserted", async () => {
     await db.prepare("CREATE TRIGGER fail_movement_insert BEFORE INSERT ON equipment_movements BEGIN SELECT RAISE(ABORT, 'test movement failure'); END").run();
 
-    await assert.rejects(createMovement(db, { actor: student, equipmentId: 1, toLocationId: 2 }));
+    await assert.rejects(createMovement(db, { actor: student, equipmentId: 1, toLocationId: 2 }), /test movement failure/);
     assert.equal((await db.prepare("SELECT current_location_id FROM equipment WHERE id = 1").first()).current_location_id, 1);
     assert.equal(await db.prepare("SELECT count(*) FROM equipment_movements").first("count(*)"), 0);
   });

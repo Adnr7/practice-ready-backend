@@ -31,6 +31,29 @@ export interface BookingValidationResult {
   requiredSlots?: string[]; // array of startTime strings
 }
 
+export interface BookingPolicy {
+  id?: number;
+  version: string;
+  slotMinutes: number;
+  minimumMinutes: number;
+  maximumMinutes: number;
+  advanceDays: number;
+  openingTime: string;
+  closingTime: string;
+  cancellationCutoffMinutes: number;
+}
+
+export const DEFAULT_BOOKING_POLICY: BookingPolicy = {
+  version: "legacy-default",
+  slotMinutes: 30,
+  minimumMinutes: 30,
+  maximumMinutes: 180,
+  advanceDays: 36500,
+  openingTime: "00:00",
+  closingTime: "00:00",
+  cancellationCutoffMinutes: 0,
+};
+
 /**
  * The practice-room schedule runs on the institution's wall clock.
  * True School of Music operates in India, which is a fixed UTC+05:30 offset
@@ -175,7 +198,8 @@ export function validateBookingRequest(
     startTime: string;
     endTime: string;
   },
-  now: InstitutionNow = getInstitutionNow()
+  now: InstitutionNow = getInstitutionNow(),
+  policy: BookingPolicy = DEFAULT_BOOKING_POLICY,
 ): BookingValidationResult {
   const { date, startTime, endTime } = params;
 
@@ -194,11 +218,18 @@ export function validateBookingRequest(
   const startMins = timeToMinutes(startTime);
   const endMins = normalizeEndMinutes(endTime);
 
-  // Must be in 30-minute intervals
-  if (startMins % 30 !== 0 || endMins % 30 !== 0) {
+  const slotMinutes = Number.isSafeInteger(policy.slotMinutes) && policy.slotMinutes > 0 ? policy.slotMinutes : 30;
+  const minimumMinutes = Number.isSafeInteger(policy.minimumMinutes) && policy.minimumMinutes > 0 ? policy.minimumMinutes : 30;
+  const maximumMinutes = Number.isSafeInteger(policy.maximumMinutes) && policy.maximumMinutes >= minimumMinutes ? policy.maximumMinutes : 180;
+  const openingMins = timeToMinutes(policy.openingTime) === 0 && policy.openingTime === "00:00" ? 0 : timeToMinutes(policy.openingTime);
+  const closingMins = policy.closingTime === "00:00" ? 1440 : timeToMinutes(policy.closingTime);
+
+  // The D1 schedule has 30-minute rows; a published policy can require a
+  // coarser booking increment while still reserving every underlying row.
+  if (startMins % slotMinutes !== 0 || endMins % slotMinutes !== 0) {
     return {
       valid: false,
-      error: "Bookings must be aligned to 30-minute intervals.",
+      error: slotMinutes === 30 ? "Bookings must be aligned to 30-minute intervals." : `Bookings must be aligned to ${slotMinutes}-minute intervals.`,
     };
   }
 
@@ -212,27 +243,24 @@ export function validateBookingRequest(
 
   const duration = endMins - startMins;
 
-  // Enforce maximum 3 hours (180 minutes) policy
-  if (duration > 180) {
+  if (duration > maximumMinutes) {
     return {
       valid: false,
-      error: "Booking exceeds maximum allowed duration of 3 hours (180 minutes).",
+      error: maximumMinutes === 180 ? "Booking exceeds maximum allowed duration of 3 hours (180 minutes)." : `Booking exceeds the maximum allowed duration of ${maximumMinutes} minutes.`,
     };
   }
 
-  // Minimum duration: 30 minutes
-  if (duration < 30) {
+  if (duration < minimumMinutes) {
     return {
       valid: false,
-      error: "Booking duration must be at least 30 minutes.",
+      error: minimumMinutes === 30 ? "Booking duration must be at least 30 minutes." : `Booking duration must be at least ${minimumMinutes} minutes.`,
     };
   }
 
-  // Enforce the per-calendar-date bookable window (00:00-24:00)
-  if (startMins < BOOKING_WINDOW_START_MINUTES || endMins > BOOKING_WINDOW_END_MINUTES) {
+  if (startMins < openingMins || endMins > closingMins) {
     return {
       valid: false,
-      error: "Requested time is outside bookable hours (00:00-24:00).",
+      error: `Requested time is outside bookable hours (${policy.openingTime}-${policy.closingTime}).`,
     };
   }
 
@@ -241,6 +269,16 @@ export function validateBookingRequest(
     return {
       valid: false,
       error: "Bookings cannot be made for past dates. Please choose today or a future date.",
+    };
+  }
+
+  const requestedDay = Date.parse(`${date}T00:00:00Z`);
+  const currentDay = Date.parse(`${now.date}T00:00:00Z`);
+  const advanceDays = Number.isSafeInteger(policy.advanceDays) && policy.advanceDays >= 0 ? policy.advanceDays : DEFAULT_BOOKING_POLICY.advanceDays;
+  if (requestedDay > currentDay + advanceDays * 86_400_000) {
+    return {
+      valid: false,
+      error: `Bookings can be made at most ${advanceDays} days in advance.`,
     };
   }
 

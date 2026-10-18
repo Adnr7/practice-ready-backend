@@ -2,6 +2,9 @@ import { and, eq, like, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@/db";
 import { equipment, locations } from "@/db/schema";
+import { env } from "cloudflare:workers";
+import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
+import { readStaffJson, requireStaffActor, saveEquipmentCatalog, staffOperationErrorResponse } from "@/lib/staff-operations";
 
 const EQUIPMENT_STATUSES = ["ready", "away", "attention", "service", "missing"] as const;
 type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
@@ -13,6 +16,14 @@ export async function GET(request: Request) {
     const type = searchParams.get("type")?.trim();
     const locationIdParam = searchParams.get("locationId");
     const status = searchParams.get("status")?.trim();
+    const includeArchived = searchParams.get("includeArchived") === "true";
+
+    if (includeArchived) {
+      configureAuthSecret(env.AUTH_SECRET);
+      const session = await getSessionFromRequest(request);
+      if (!session) return Response.json({ error: "Authentication required to include archived equipment." }, { status: 401 });
+      requireStaffActor({ userId: session.userId, role: session.role });
+    }
 
     const db = getDb();
     const currentLoc = alias(locations, "current_loc");
@@ -50,6 +61,7 @@ export async function GET(request: Request) {
       conditions.push(eq(equipment.status, status as EquipmentStatus));
     }
 
+    if (!includeArchived) conditions.push(eq(equipment.archived, false));
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const items = await db
@@ -68,6 +80,8 @@ export async function GET(request: Request) {
         defaultRoomId: equipment.defaultRoomId,
         lastInspectedAt: equipment.lastInspectedAt,
         notes: equipment.notes,
+        archived: equipment.archived,
+        photoAttachmentId: equipment.photoAttachmentId,
       })
       .from(equipment)
       .leftJoin(currentLoc, eq(equipment.currentLocationId, currentLoc.id))
@@ -77,7 +91,20 @@ export async function GET(request: Request) {
 
     return Response.json({ equipment: items });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return Response.json({ error: message }, { status: 500 });
+    return staffOperationErrorResponse(error);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    configureAuthSecret(env.AUTH_SECRET);
+    const db = getDb().$client;
+    const session = await getSessionFromRequest(request, db);
+    if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
+    requireStaffActor({ userId: session.userId, role: session.role });
+    const inserted = await saveEquipmentCatalog(db, session, await readStaffJson(request));
+    return Response.json({ equipment: inserted }, { status: 201 });
+  } catch (error) {
+    return staffOperationErrorResponse(error);
   }
 }

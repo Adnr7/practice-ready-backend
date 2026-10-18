@@ -1,4 +1,5 @@
 import type { BookingActor } from "./booking-lifecycle.ts";
+import { operationalConflictResponse } from "./operational-conflicts.ts";
 
 export type RoomReadinessState = "usable" | "restricted" | "closed" | "unknown";
 export type RestrictionState = "allowed" | "restricted" | "unsupported" | "unknown";
@@ -44,6 +45,8 @@ export class RoomReadinessError extends Error {
 }
 
 export function roomReadinessErrorResponse(error: unknown): Response {
+  const conflict = operationalConflictResponse(error);
+  if (conflict) return conflict;
   if (error instanceof RoomReadinessError) {
     return Response.json({ error: error.message, code: error.code, ...(error.details ? { details: error.details } : {}) }, { status: error.status });
   }
@@ -108,28 +111,44 @@ export async function updateRoomReadiness(
   if (!input.state && input.notes === undefined && !input.restriction) {
     throw new RoomReadinessError("Provide a room state, notes, or restriction update.", 400, "ROOM_UPDATE_EMPTY");
   }
+  if (input.state !== undefined && !["usable", "restricted", "closed", "unknown"].includes(input.state)) {
+    throw new RoomReadinessError("Invalid room readiness state.", 400, "ROOM_STATE_INVALID");
+  }
+  if (input.notes !== undefined && input.notes !== null && (typeof input.notes !== "string" || input.notes.length > 4000)) {
+    throw new RoomReadinessError("Room notes must be at most 4,000 characters.", 400, "ROOM_NOTES_INVALID");
+  }
+  const statements: D1PreparedStatement[] = [];
   if (input.restriction) {
+    if (!["allowed", "restricted", "unsupported", "unknown"].includes(input.restriction.state)) {
+      throw new RoomReadinessError("Invalid activity restriction state.", 400, "RESTRICTION_INVALID");
+    }
     if (!input.restriction.activityKey.trim() || input.restriction.explanation.trim().length < 3) {
       throw new RoomReadinessError("A restriction activity and explanation are required.", 400, "RESTRICTION_INVALID");
     }
-    await db.prepare(`
+    statements.push(
+      db.prepare("UPDATE room_restrictions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ? AND activity_key = ? AND is_active = 1").bind(input.roomId, input.restriction.activityKey.trim()),
+      db.prepare(`
       INSERT INTO room_restrictions (room_id, activity_key, state, explanation, is_active, created_by_user_id, updated_at)
       VALUES (?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
-    `).bind(input.roomId, input.restriction.activityKey.trim(), input.restriction.state, input.restriction.explanation.trim(), input.actor.userId).run();
+      `).bind(input.roomId, input.restriction.activityKey.trim(), input.restriction.state, input.restriction.explanation.trim(), input.actor.userId),
+    );
   }
   if (input.state || input.notes !== undefined) {
-    await db.prepare(`
+    statements.push(db.prepare(`
       UPDATE rooms SET readiness_state = COALESCE(?, readiness_state), readiness_notes = ?, readiness_verified_at = ?, readiness_verified_by_user_id = ?
       WHERE id = ?
-    `).bind(input.state ?? null, input.notes === undefined ? current.readinessNotes : input.notes, new Date().toISOString(), input.actor.userId, input.roomId).run();
+    `).bind(input.state ?? null, input.notes === undefined ? current.readinessNotes : input.notes, new Date().toISOString(), input.actor.userId, input.roomId));
   }
+  statements.push(db.prepare("INSERT INTO audit_events(actor_user_id,action,entity_type,entity_id,reason,details) VALUES (?,'readiness_updated','room',?,?,?)")
+    .bind(input.actor.userId, String(input.roomId), input.notes ?? input.restriction?.explanation ?? "Staff readiness verification", JSON.stringify({ state: input.state, restriction: input.restriction })));
+  await db.batch(statements);
   const updated = await getRoomReadiness(db, input.roomId);
   if (!updated) throw new RoomReadinessError("Room disappeared after update.", 500, "ROOM_WRITE_FAILED");
   return updated;
 }
 
-export function bookingInstant(date: string, time: string): number {
-  const minutes = time === "00:00" ? 1440 : Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+export function bookingInstant(date: string, time: string, isEnd = false): number {
+  const minutes = isEnd && time === "00:00" ? 1440 : Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
   const [year, month, day] = date.split("-").map(Number);
   return Date.UTC(year, month - 1, day, 0, minutes) - 330 * 60_000;
 }
@@ -139,7 +158,7 @@ async function overlappingBookings(db: D1Database, roomId: number, startsAt: num
     SELECT id, booking_ref AS bookingRef, date, start_time AS startTime, end_time AS endTime
     FROM bookings WHERE room_id = ? AND status = 'confirmed'
   `).bind(roomId).all<{ id: number; bookingRef: string; date: string; startTime: string; endTime: string }>();
-  return rows.results.filter((booking) => bookingInstant(booking.date, booking.startTime) < endsAt && bookingInstant(booking.date, booking.endTime) > startsAt);
+  return rows.results.filter((booking) => bookingInstant(booking.date, booking.startTime) < endsAt && bookingInstant(booking.date, booking.endTime, true) > startsAt);
 }
 
 export async function createRoomClosure(
@@ -162,12 +181,16 @@ export async function createRoomClosure(
       { bookings: affected.map((booking) => booking.bookingRef), bookingIds: affected.map((booking) => booking.id) },
     );
   }
-  const result = await db.prepare(`
+  const [result] = await db.batch([
+    db.prepare(`
     INSERT INTO room_closures (room_id, starts_at, ends_at, reason, source_report_id, created_by_user_id)
     VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id, room_id AS roomId, starts_at AS startsAt, ends_at AS endsAt, reason, is_active AS isActive, created_at AS createdAt
-  `).bind(input.roomId, startsAt, endsAt, input.reason.trim(), input.sourceReportId ?? null, input.actor.userId).first();
-  return result;
+    `).bind(input.roomId, startsAt, endsAt, input.reason.trim(), input.sourceReportId ?? null, input.actor.userId),
+    db.prepare("INSERT INTO audit_events(actor_user_id,action,entity_type,entity_id,reason,details) SELECT ?,'closure_created','room_closure',CAST(last_insert_rowid() AS TEXT),?,? WHERE changes()=1")
+      .bind(input.actor.userId, input.reason.trim(), JSON.stringify({ roomId: input.roomId, startsAt, endsAt })),
+  ]);
+  return result.results[0];
 }
 
 export async function cancelRoomClosure(db: D1Database, input: { closureId: number; actor: BookingActor; reason?: string }) {
@@ -175,13 +198,17 @@ export async function cancelRoomClosure(db: D1Database, input: { closureId: numb
   if (!input.reason || input.reason.trim().length < 3) throw new RoomReadinessError("A cancellation reason is required.", 400, "CLOSURE_REASON_REQUIRED");
   const closure = await db.prepare("SELECT id FROM room_closures WHERE id = ? AND is_active = 1 LIMIT 1").bind(input.closureId).first<{ id: number }>();
   if (!closure) throw new RoomReadinessError("Active room closure not found.", 404, "CLOSURE_NOT_FOUND");
-  await db.prepare("UPDATE room_closures SET is_active = 0, cancelled_at = CURRENT_TIMESTAMP WHERE id = ?").bind(input.closureId).run();
+  await db.batch([
+    db.prepare("UPDATE room_closures SET is_active = 0, cancelled_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active=1").bind(input.closureId),
+    db.prepare("INSERT INTO audit_events(actor_user_id,action,entity_type,entity_id,reason,details) SELECT ?,'closure_cancelled','room_closure',?,?, '{}' WHERE changes()=1")
+      .bind(input.actor.userId, String(input.closureId), input.reason.trim()),
+  ]);
   return { id: input.closureId, cancelled: true };
 }
 
 export async function roomIsClosedForWindow(db: D1Database, roomId: number, date: string, startTime: string, endTime: string): Promise<boolean> {
   const startsAt = bookingInstant(date, startTime);
-  const endsAt = bookingInstant(date, endTime);
+  const endsAt = bookingInstant(date, endTime, true);
   const state = await db.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: RoomReadinessState }>();
   if (!state || state.readinessState === "closed") return true;
   const closures = await db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM room_closures WHERE room_id = ? AND is_active = 1").bind(roomId).all<{ startsAt: string; endsAt: string }>();

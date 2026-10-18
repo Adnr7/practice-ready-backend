@@ -45,6 +45,8 @@ import {
 import { isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
 import { LiveMovements, LiveReservations, LiveSupport } from "@/components/live-workflows";
+import { LivePractice } from "@/components/live-practice";
+import { LiveStaff } from "@/components/live-staff";
 
 
 const PRACTICE_READY_MUSIC_SRC = "/practice-ready-smooth-jazz.mp3";
@@ -306,6 +308,8 @@ type Screen =
   | "reservations"
   | "support"
   | "movements"
+  | "practice"
+  | "staff"
   | "date"
   | "mpr"
   | "period"
@@ -2935,11 +2939,13 @@ export default function Home() {
     "rounded-xl font-medium text-slate-500 dark:text-[#9AA6BC] data-[state=active]:bg-white dark:data-[state=active]:bg-[#252C3E] data-[state=active]:text-violet-700 dark:data-[state=active]:text-violet-200 data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-violet-300 dark:data-[state=active]:ring-violet-500/70";
   const [conflictSlot, setConflictSlot] = useState("");
   const [bookingError, setBookingError] = useState("");
+  const bookingAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  const [availabilityRetry, setAvailabilityRetry] = useState(0);
   const [recoveringFromConflict, setRecoveringFromConflict] = useState(false);
   // Start from a deterministic value so SSR and the client's first render
   // match; the effect below applies the real time-of-day greeting on mount.
   const greeting = useSyncExternalStore(subscribeGreeting, getGreeting, getServerGreeting);
-  const liveSlotKey = `${screen}:${room}:${selectedDate ? dateKey(selectedDate) : "today"}`;
+  const liveSlotKey = `${screen}:${room}:${selectedDate ? dateKey(selectedDate) : "today"}:${availabilityRetry}`;
   const liveSlots = liveSlotResult?.key === liveSlotKey ? liveSlotResult.slots : null;
 
   useEffect(() => {
@@ -3245,7 +3251,7 @@ export default function Home() {
     // Slots from midnight to 06:00 belong to the next calendar date (see
     // bookingDateForSlots), so booked names come from two calendar dates.
     // The operational day spans both fetches, so treat them as one logical
-    // query while allowing a failed half to use the demo fallback below.
+    // query. A failed half must never be replaced with fixture availability.
     resolveRoomId(room)
       .then((roomId) =>
         Promise.all([
@@ -3255,7 +3261,7 @@ export default function Home() {
       )
       .then(([today, tomorrow]) => {
         if (cancelled) return;
-        if (!today && !tomorrow) {
+        if (!today || !tomorrow) {
           setLiveSlotResult({ key: liveSlotKey, slots: null });
           return;
         }
@@ -3271,31 +3277,6 @@ export default function Home() {
           }
         }
 
-        // The operational day spans two API dates. Preserve live data from
-        // whichever request succeeded, and use the existing demo occupancy
-        // only for the missing half rather than treating that half as empty.
-        const demoBooked =
-          room === "MPR 2"
-            ? booked2
-            : room === "MPR 4"
-              ? booked4
-              : room === "MPR 5"
-                ? booked5
-                : booked3;
-        if (!today) {
-          for (const startTime of demoBooked) {
-            if (startTime >= "06:00") {
-              info[startTime] = { booked: true, bookedBy: null };
-            }
-          }
-        }
-        if (!tomorrow) {
-          for (const startTime of demoBooked) {
-            if (startTime < "06:00") {
-              info[startTime] = { booked: true, bookedBy: null };
-            }
-          }
-        }
         setLiveSlotResult({ key: liveSlotKey, slots: info });
       })
       .catch(() => {
@@ -3373,6 +3354,10 @@ export default function Home() {
           setCurrentUser(bookingUser);
           setStudentName(bookingUser.fullName);
         }
+        const fingerprint = JSON.stringify([bookingUser?.id, roomId, dateStr, startTime, endTime]);
+        if (bookingAttempt.current?.fingerprint !== fingerprint) {
+          bookingAttempt.current = { fingerprint, key: `booking-${crypto.randomUUID()}` };
+        }
         return submitBooking({
           roomId,
           date: dateStr,
@@ -3381,7 +3366,7 @@ export default function Home() {
           ...(bookingUser
             ? {}
             : { guestName: studentName.trim() || "Student Practice User" }),
-        });
+        }, bookingAttempt.current.key);
       })
       .then((res) => {
         if (!res.success && res.conflictingSlots && res.conflictingSlots.length > 0) {
@@ -3391,6 +3376,7 @@ export default function Home() {
           setBookingError(res.error ?? "The reservation could not be confirmed.");
           setScreen("booking-error");
         } else {
+          bookingAttempt.current = null;
           const booking = res.booking;
           if (booking) {
             const reservation: ActiveReservation = {
@@ -3721,6 +3707,8 @@ export default function Home() {
         onReservations={() => go("reservations")}
         onSupport={() => go("support")}
         onMovements={() => go("movements")}
+        onPractice={() => go("practice")}
+        onStaff={() => go("staff")}
         greeting={greeting}
         activeReservation={visibleActiveReservation}
         reservationPhase={reservationPhase}
@@ -3730,6 +3718,8 @@ export default function Home() {
   if (screen === "reservations") return <LiveReservations user={currentUser} onBack={back} />;
   if (screen === "support") return <LiveSupport user={currentUser} onBack={back} />;
   if (screen === "movements") return <LiveMovements user={currentUser} onBack={back} />;
+  if (screen === "practice") return <LivePractice onBack={back} />;
+  if (screen === "staff") return <LiveStaff user={currentUser} onUserChange={setCurrentUser} onBack={back} onMovements={() => go("movements")} />;
   if (screen === "schedule")
     return (
       <ScheduleScreen back={back} />
@@ -4055,6 +4045,13 @@ export default function Home() {
   }
 
   if (["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
+    if (!demoPresentation && liveSlots === null) {
+      const failed = liveSlotResult?.key === liveSlotKey;
+      return <Shell title={`${room} availability`} subtitle="Live availability is required before choosing a time." back={back} home={home}>
+        <p role={failed ? "alert" : "status"} className="mt-6 text-sm">{failed ? "Could not load the complete schedule. No sample availability is shown." : "Loading live availability…"}</p>
+        {failed && <button className="mt-4 rounded-xl bg-violet-600 px-4 py-3 font-semibold text-white" onClick={() => setAvailabilityRetry((value) => value + 1)}>Retry availability</button>}
+      </Shell>;
+    }
     const liveBookedStarts =
       liveSlots !== null ? Object.keys(liveSlots).filter((t) => liveSlots[t].booked) : null;
     const baseBooked =
@@ -5421,6 +5418,8 @@ function HomeScreen({
   onReservations,
   onSupport,
   onMovements,
+  onPractice,
+  onStaff,
   greeting,
   activeReservation,
   reservationPhase,
@@ -5432,6 +5431,8 @@ function HomeScreen({
   onReservations: () => void;
   onSupport: () => void;
   onMovements: () => void;
+  onPractice: () => void;
+  onStaff: () => void;
   greeting: string;
   activeReservation: ActiveReservation | null;
   reservationPhase: BookingPhase;
@@ -5665,6 +5666,18 @@ function HomeScreen({
                 title="Equipment Movements"
                 text="Record actual moves and returns."
                 onClick={onMovements}
+              />
+              <HomeCard
+                icon={<ShieldCheck />}
+                title="Practice Fit & Rules"
+                text="Check live room suitability and published rules."
+                onClick={onPractice}
+              />
+              <HomeCard
+                icon={<ShieldCheck />}
+                title="Staff Workspace"
+                text="Staff sign in, catalog, triage and room operations."
+                onClick={onStaff}
               />
             </div>
           </div>

@@ -52,6 +52,21 @@ describe("Booking Engine & Conflict Prevention", () => {
     assert.ok(res.error?.includes("maximum allowed duration of 3 hours"));
   });
 
+  it("applies a published booking policy when provided", () => {
+    const policy = {
+      version: "2026-10-pilot",
+      slotMinutes: 60,
+      minimumMinutes: 60,
+      maximumMinutes: 120,
+      advanceDays: 2,
+      openingTime: "09:00",
+      closingTime: "18:00",
+    };
+    assert.equal(validateBookingRequest({ date: "2026-10-03", startTime: "09:00", endTime: "10:00" }, NOW, policy).valid, true);
+    assert.equal(validateBookingRequest({ date: "2026-10-04", startTime: "09:00", endTime: "10:00" }, NOW, policy).valid, false);
+    assert.equal(validateBookingRequest({ date: "2026-10-02", startTime: "08:00", endTime: "09:00" }, NOW, policy).valid, false);
+  });
+
   it("should reject bookings not aligned to 30-minute steps", () => {
     const res = validateBookingRequest(
       {

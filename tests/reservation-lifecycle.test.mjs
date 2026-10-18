@@ -27,6 +27,8 @@ const migrations = [
   "0003_amusing_nekra.sql",
   "0004_equipment_movements.sql",
   "0005_reservation_lifecycle.sql",
+  "0006_room_readiness.sql",
+  "0007_frontend_workflows.sql",
 ];
 
 async function applyMigrations(db) {
@@ -55,6 +57,9 @@ describe("Persistent reservation lifecycle and session equipment usage", () => {
     emulator = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('ok'); } }", compatibilityDate: "2026-05-15", d1Databases: ["DB"] });
     db = await emulator.getD1Database("DB");
     await applyMigrations(db);
+    // These tests use a far-future fixture date; lifecycle behavior is not a
+    // test of the published advance-booking horizon.
+    await db.prepare("UPDATE booking_policies SET advance_days = 36500 WHERE is_current = 1").run();
     await db.batch([
       db.prepare("INSERT INTO users (id, email, password_hash, salt, full_name, role) VALUES (1, 'one@example.com', 'hash', 'salt', 'Student One', 'student')"),
       db.prepare("INSERT INTO users (id, email, password_hash, salt, full_name, role) VALUES (2, 'two@example.com', 'hash', 'salt', 'Student Two', 'student')"),

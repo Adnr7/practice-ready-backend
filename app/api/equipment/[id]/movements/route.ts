@@ -11,9 +11,25 @@ import {
 } from "@/lib/equipment-movements";
 import { deriveBookingPhase, getInstitutionNow } from "@/lib/booking-engine";
 import { bookingInstant } from "@/lib/room-readiness";
+import { assertStudentMovementDesignation, listMovementDestinations } from "@/lib/movement-permissions";
 
 function unauthenticated(): Response {
   return Response.json({ error: "Authentication is required." }, { status: 401 });
+}
+
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    configureAuthSecret(env.AUTH_SECRET);
+    const session = await getSessionFromRequest(request);
+    if (!session) return unauthenticated();
+    const equipmentId = parseEquipmentId((await params).id);
+    const booking = new URL(request.url).searchParams.get("bookingId");
+    const bookingId = booking === null ? undefined : parseEquipmentId(booking);
+    const destinations = await listMovementDestinations(getDb().$client, session, equipmentId, bookingId);
+    return Response.json({ destinations }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return movementErrorResponse(error);
+  }
 }
 
 export async function POST(
@@ -42,9 +58,10 @@ export async function POST(
       if (!booking || booking.userId !== session.userId || booking.status !== "confirmed" || booking.roomLocationId === null || booking.currentLocationId !== booking.roomLocationId || deriveBookingPhase(booking.date, booking.startTime, booking.endTime, booking.status, getInstitutionNow()) !== "in_progress") {
         return Response.json({ error: "The equipment must be present in your active reservation's room.", code: "MOVEMENT_SESSION_NOT_ELIGIBLE" }, { status: 403 });
       }
-      if (!body.expectedReturnAt || Date.parse(body.expectedReturnAt) > Date.now() + 3 * 60 * 60 * 1000 || Date.parse(body.expectedReturnAt) > bookingInstant(booking.date, booking.endTime)) {
+      if (!body.expectedReturnAt || Date.parse(body.expectedReturnAt) > Date.now() + 3 * 60 * 60 * 1000 || Date.parse(body.expectedReturnAt) > bookingInstant(booking.date, booking.endTime, true)) {
         return Response.json({ error: "Student moves require a return time within three hours and before the session ends.", code: "MOVEMENT_RETURN_WINDOW_INVALID" }, { status: 400 });
       }
+      await assertStudentMovementDesignation(db, equipmentId, body.toLocationId);
     }
     const actor: MovementActor = {
       userId: session.userId,

@@ -8,6 +8,8 @@ import {
   parseCookies,
   createSessionCookie,
   createClearSessionCookie,
+  getSessionFromRequest,
+  revokeSessionFromRequest,
 } from "../lib/auth.ts";
 
 describe("Edge Auth & Cryptography", () => {
@@ -29,6 +31,13 @@ describe("Edge Auth & Cryptography", () => {
 
     const isInvalid = await verifyPassword("WrongPassword123", hash, salt);
     assert.equal(isInvalid, false, "Incorrect password must fail verification");
+  });
+
+  it("preserves leading and trailing password whitespace", async () => {
+    const password = "  PracticeMusic2026!  ";
+    const { hash, salt } = await hashPassword(password);
+    assert.equal(await verifyPassword(password, hash, salt), true);
+    assert.equal(await verifyPassword(password.trim(), hash, salt), false);
   });
 
   it("should sign and verify HMAC-SHA256 session tokens", async () => {
@@ -101,6 +110,33 @@ describe("Edge Auth & Cryptography", () => {
     } finally {
       process.env.AUTH_SECRET = "test-only-session-secret-never-deploy";
       if (jwtSecret !== undefined) process.env.JWT_SECRET = jwtSecret;
+    }
+  });
+
+  it("rejects legacy signed cookies even when their signatures and claims verify", async () => {
+    const token = await createSessionToken({ userId: 1, email: "admin@example.com", fullName: "Admin", role: "admin" });
+    assert.ok(await verifySessionToken(token));
+    const request = new Request("https://example.com/protected", { headers: { cookie: `pr_session=${token}` } });
+    let queried = false;
+    const unavailableDb = { prepare() { queried = true; throw new Error("Legacy tokens must not reach storage"); } };
+    assert.equal(await getSessionFromRequest(request, unavailableDb), null);
+    assert.equal(queried, false);
+  });
+
+  it("fails closed without a Worker runtime or when session storage fails", async () => {
+    const token = `pr_s1_${"a".repeat(64)}`;
+    const request = new Request("https://example.com/protected", { headers: { cookie: `pr_session=${token}` } });
+    assert.equal(await getSessionFromRequest(request), null);
+    const unavailableDb = { prepare() { throw new Error("Storage unavailable"); } };
+    assert.equal(await getSessionFromRequest(request, unavailableDb), null);
+    await assert.rejects(revokeSessionFromRequest(request, unavailableDb), /Storage unavailable/);
+  });
+
+  it("treats missing, malformed, and unknown-format session cookies as anonymous", async () => {
+    for (const cookie of ["", "pr_session=%ZZ", "pr_session=garbage", `pr_session=pr_s1_${"a".repeat(63)}`]) {
+      const request = new Request("https://example.com/protected", { headers: { cookie } });
+      assert.equal(await getSessionFromRequest(request), null);
+      await revokeSessionFromRequest(request);
     }
   });
 });

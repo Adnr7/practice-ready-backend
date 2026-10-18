@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bookings, rooms, timeSlots } from "@/db/schema";
-import { reserveSlots, isBookingReferenceConflict, isBookingClaimConflict, type StoredBooking } from "@/lib/booking-store";
+import { reserveSlots, reserveSlotsIdempotently, isBookingReferenceConflict, isBookingClaimConflict, type StoredBooking } from "@/lib/booking-store";
 import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
 import {
   generateBookingReference,
@@ -11,8 +11,14 @@ import {
   isBookingElapsed,
   validateBookingRequest,
   deriveBookingPhase,
+  isValidCalendarDate,
+  normalizeEndMinutes,
+  timeToMinutes,
 } from "@/lib/booking-engine";
 import { roomIsClosedForWindow } from "@/lib/room-readiness";
+import { IdempotencyError, prepareIdempotencyRequest, replayIdempotentResponse } from "@/lib/idempotency";
+import { getCurrentBookingPolicy } from "@/lib/booking-policy";
+import { operationalConflictResponse } from "@/lib/operational-conflicts";
 
 export async function GET(request: Request) {
   try {
@@ -41,8 +47,9 @@ export async function GET(request: Request) {
         roomName: rooms.name,
         date: bookings.date,
         startTime: bookings.startTime,
-        endTime: bookings.endTime,
-        durationMinutes: bookings.durationMinutes,
+         endTime: bookings.endTime,
+         durationMinutes: bookings.durationMinutes,
+         policyVersion: bookings.policyVersion,
         status: bookings.status,
         version: bookings.version,
         sessionEndedAt: bookings.sessionEndedAt,
@@ -109,19 +116,25 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     configureAuthSecret(env.AUTH_SECRET);
-    const body = (await request.json()) as {
-      roomId?: number;
-      date?: string;
-      startTime?: string;
-      endTime?: string;
-      guestName?: string;
-      guestStudentId?: string;
-    };
+    const session = await getSessionFromRequest(request);
+    if (!session) {
+      return Response.json({ error: "Sign in is required for operational room reservations." }, { status: 401 });
+    }
+    let body: Record<string, unknown>;
+    try {
+      const value: unknown = await request.json();
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return Response.json({ error: "Request body must be a JSON object." }, { status: 400 });
+      }
+      body = value as Record<string, unknown>;
+    } catch {
+      return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    }
 
     const roomId = Number(body.roomId);
-    const date = body.date?.trim();
-    const startTime = body.startTime?.trim();
-    const endTime = body.endTime?.trim();
+    const date = typeof body.date === "string" ? body.date.trim() : "";
+    const startTime = typeof body.startTime === "string" ? body.startTime.trim() : "";
+    const endTime = typeof body.endTime === "string" ? body.endTime.trim() : "";
 
     if (!Number.isSafeInteger(roomId) || roomId <= 0 || !date || !startTime || !endTime) {
       return Response.json(
@@ -130,16 +143,32 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate university booking rules
-    const validation = validateBookingRequest({ date, startTime, endTime });
+    // Only immutable input checks precede replay. Published policy, the clock,
+    // room activation/closures, and availability may have changed since creation.
+    if (!isValidCalendarDate(date)) {
+      return Response.json({ error: "Invalid date. Expected a real calendar date in YYYY-MM-DD format." }, { status: 400 });
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) {
+      return Response.json({ error: "Invalid time format. Expected HH:MM." }, { status: 400 });
+    }
+    if (normalizeEndMinutes(endTime) <= timeToMinutes(startTime)) {
+      return Response.json({ error: "End time must be after start time." }, { status: 400 });
+    }
+
+    const db = getDb();
+    const idempotency = await prepareIdempotencyRequest(session.userId, "booking.create", request.headers.get("Idempotency-Key"), body);
+    const replay = await replayIdempotentResponse(db.$client, idempotency);
+    if (replay) return replay;
+    const policy = await getCurrentBookingPolicy(db.$client);
+
+    // Validate the currently published university booking policy.
+    const validation = validateBookingRequest({ date, startTime, endTime }, getInstitutionNow(), policy);
     if (!validation.valid || !validation.requiredSlots) {
       return Response.json(
         { error: validation.error ?? "Invalid booking request parameters." },
         { status: 400 }
       );
     }
-
-    const db = getDb();
 
     // Verify target room exists and is active
     const [room] = await db
@@ -156,11 +185,6 @@ export async function POST(request: Request) {
       return Response.json({ error: "This room is closed or unavailable during the requested time.", code: "ROOM_CLOSED" }, { status: 409 });
     }
 
-    // Identify user or fallback to guest for evaluation demo
-    const session = await getSessionFromRequest(request);
-    if (!session) {
-      return Response.json({ error: "Sign in is required for operational room reservations." }, { status: 401 });
-    }
     const userId = session.userId;
     const guestStudentName = null;
     const guestStudentId = null;
@@ -181,11 +205,18 @@ export async function POST(request: Request) {
     let newBooking: StoredBooking | null = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
-        newBooking = await reserveSlots(db.$client, {
+        const booking = {
           bookingRef: generateBookingReference(),
           userId, guestStudentName, guestStudentId, roomId, date, startTime, endTime,
           durationMinutes: validation.durationMinutes!,
-        }, validation.requiredSlots);
+          policyVersion: policy.version,
+        };
+        if (idempotency) {
+          const response = await reserveSlotsIdempotently(db.$client, booking, validation.requiredSlots, idempotency, room.name);
+          if (response) return response;
+        } else {
+          newBooking = await reserveSlots(db.$client, booking, validation.requiredSlots);
+        }
       } catch (error) {
         if ((isBookingReferenceConflict(error) || isBookingClaimConflict(error)) && attempt < 4) continue;
         throw error;
@@ -212,8 +243,7 @@ export async function POST(request: Request) {
 
     if (!newBooking) throw new Error("Could not generate a unique booking reference.");
 
-    return Response.json(
-      {
+    const responseBody = {
         booking: {
           id: newBooking.id,
           bookingRef: newBooking.bookingRef,
@@ -221,16 +251,21 @@ export async function POST(request: Request) {
           roomName: room.name,
           date: newBooking.date,
           startTime: newBooking.startTime,
-          endTime: newBooking.endTime,
-          durationMinutes: newBooking.durationMinutes,
+           endTime: newBooking.endTime,
+           durationMinutes: newBooking.durationMinutes,
+           policyVersion: newBooking.policyVersion,
           guestStudentName: newBooking.guestStudentName,
           status: newBooking.status,
           createdAt: newBooking.createdAt,
         },
-      },
-      { status: 201 }
-    );
+      };
+    return Response.json(responseBody, { status: 201 });
   } catch (error) {
+    if (error instanceof IdempotencyError) {
+      return Response.json({ error: error.message, code: error.code }, { status: error.status });
+    }
+    const conflict = operationalConflictResponse(error);
+    if (conflict) return conflict;
     const message = error instanceof Error ? error.message : "Internal server error";
     return Response.json({ error: message }, { status: 500 });
   }

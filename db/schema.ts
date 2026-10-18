@@ -8,7 +8,9 @@ export const users = sqliteTable("users", {
   salt: text("salt").notNull(),
   fullName: text("full_name").notNull(),
   studentId: text("student_id"),
+  phone: text("phone"),
   role: text("role", { enum: ["student", "technician", "admin"] }).notNull().default("student"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -46,6 +48,8 @@ export const equipment = sqliteTable("equipment", {
   defaultRoomId: integer("default_room_id").references(() => rooms.id),
   lastInspectedAt: text("last_inspected_at"),
   notes: text("notes"),
+  archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+  photoAttachmentId: integer("photo_attachment_id").references(() => attachments.id, { onDelete: "set null" }),
 }, (table) => [
   index("idx_equipment_room").on(table.defaultRoomId),
   index("idx_equipment_location").on(table.currentLocationId, table.status),
@@ -64,6 +68,7 @@ export const equipmentMovements = sqliteTable("equipment_movements", {
   returnedByUserId: integer("returned_by_user_id").references(() => users.id),
   returnLocationId: integer("return_location_id").references(() => locations.id),
   notes: text("notes"),
+  reservationId: integer("reservation_id").references(() => bookings.id, { onDelete: "set null" }),
   correctionReason: text("correction_reason"),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
@@ -111,6 +116,7 @@ export const bookings = sqliteTable("bookings", {
   startTime: text("start_time").notNull(), // HH:MM
   endTime: text("end_time").notNull(), // HH:MM
   durationMinutes: integer("duration_minutes").notNull(),
+  policyVersion: text("policy_version"),
   status: text("status", { enum: ["confirmed", "cancelled", "completed"] }).notNull().default("confirmed"),
   version: integer("version").notNull().default(1),
   mutationToken: text("mutation_token"),
@@ -229,6 +235,7 @@ export const repairJobs = sqliteTable("repair_jobs", {
   completionInspectionId: integer("completion_inspection_id"),
 }, (table) => [
   index("idx_repair_jobs_equipment_stage").on(table.equipmentId, table.stage),
+  uniqueIndex("idx_repair_jobs_one_open").on(table.equipmentId).where(sql`${table.stage} <> 'completed'`),
 ]);
 
 export const repairUpdates = sqliteTable("repair_updates", {
@@ -278,6 +285,89 @@ export const roomPracticeTypes = sqliteTable("room_practice_types", {
   uniqueIndex("idx_room_practice_types_unique").on(table.roomId, table.profileId),
 ]);
 
+export const attachments = sqliteTable("attachments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerUserId: integer("owner_user_id").notNull().references(() => users.id),
+  fileName: text("file_name").notNull(),
+  mediaType: text("media_type").notNull(),
+  byteSize: integer("byte_size").notNull(),
+  dataUrl: text("data_url").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_attachments_owner_created").on(table.ownerUserId, table.createdAt),
+]);
+
+export const practiceJournalEntries = sqliteTable("practice_journal_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  bookingId: integer("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  note: text("note").notNull().default(""),
+  attachmentIds: text("attachment_ids").notNull().default("[]"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_practice_journal_booking_user").on(table.bookingId, table.userId),
+]);
+
+export const bookingPolicies = sqliteTable("booking_policies", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  version: text("version").notNull().unique(),
+  slotMinutes: integer("slot_minutes").notNull().default(30),
+  minimumMinutes: integer("minimum_minutes").notNull().default(30),
+  maximumMinutes: integer("maximum_minutes").notNull().default(180),
+  advanceDays: integer("advance_days").notNull().default(14),
+  openingTime: text("opening_time").notNull().default("00:00"),
+  closingTime: text("closing_time").notNull().default("00:00"),
+  cancellationCutoffMinutes: integer("cancellation_cutoff_minutes").notNull().default(0),
+  equipmentHandling: text("equipment_handling").notNull(),
+  movementRules: text("movement_rules").notNull(),
+  publishedAt: text("published_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  publishedByUserId: integer("published_by_user_id").references(() => users.id),
+  isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
+}, (table) => [
+  uniqueIndex("idx_booking_policies_current").on(table.isCurrent).where(sql`${table.isCurrent} = 1`),
+]);
+
+export const supportContacts = sqliteTable("support_contacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  team: text("team").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  hours: text("hours").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const auditEvents = sqliteTable("audit_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  actorUserId: integer("actor_user_id").references(() => users.id),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  reason: text("reason"),
+  details: text("details").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_audit_events_entity").on(table.entityType, table.entityId, table.createdAt),
+  index("idx_audit_events_actor").on(table.actorUserId, table.createdAt),
+]);
+
+export const idempotencyRecords = sqliteTable("idempotency_records", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  actorUserId: integer("actor_user_id").notNull().references(() => users.id),
+  operation: text("operation").notNull(),
+  requestKey: text("request_key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  statusCode: integer("status_code").notNull(),
+  responseBody: text("response_body").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiresAt: text("expires_at"),
+}, (table) => [
+  uniqueIndex("idx_idempotency_actor_operation_key").on(table.actorUserId, table.operation, table.requestKey),
+]);
+
 
 export const reports = sqliteTable("reports", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -290,6 +380,7 @@ export const reports = sqliteTable("reports", {
   bookingId: integer("booking_id").references(() => bookings.id),
   issueType: text("issue_type"),
   description: text("description").notNull(),
+  attachmentIds: text("attachment_ids").notNull().default("[]"),
   status: text("status", {
     enum: ["open", "acknowledged", "in_progress", "resolved", "closed", "reopened"],
   }).notNull().default("open"),
@@ -317,4 +408,30 @@ export const reportUpdates = sqliteTable("report_updates", {
 }, (table) => [
   index("idx_report_updates_report_created").on(table.reportId, table.createdAt),
   check("report_updates_status_check", sql`${table.status} IS NULL OR ${table.status} IN ('open', 'acknowledged', 'in_progress', 'resolved', 'closed', 'reopened')`),
+]);
+
+export const sessions = sqliteTable("sessions", {
+  tokenHash: text("token_hash").primaryKey().notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull().default(sql`(unixepoch())`),
+  expiresAt: integer("expires_at").notNull(),
+  revokedAt: integer("revoked_at"),
+}, (table) => [
+  index("idx_sessions_user").on(table.userId),
+  index("idx_sessions_expiry").on(table.expiresAt),
+]);
+
+export const movementPermissions = sqliteTable("movement_permissions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  equipmentId: integer("equipment_id").notNull().references(() => equipment.id),
+  toLocationId: integer("to_location_id").notNull().references(() => locations.id),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
+  updatedByUserId: integer("updated_by_user_id").notNull().references(() => users.id),
+  reason: text("reason").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_movement_permissions_pair").on(table.equipmentId, table.toLocationId),
+  check("movement_permissions_active_check", sql`${table.isActive} IN (0, 1)`),
+  check("movement_permissions_ids_check", sql`${table.equipmentId} > 0 AND ${table.toLocationId} > 0 AND ${table.updatedByUserId} > 0`),
 ]);

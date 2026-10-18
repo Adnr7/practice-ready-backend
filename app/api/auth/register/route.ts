@@ -3,30 +3,24 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import {
+  authErrorResponse,
   createSessionCookie,
-  createSessionToken,
-  configureAuthSecret,
   hashPassword,
+  readAuthJson,
 } from "@/lib/auth";
+import { createStoredSession } from "@/lib/session-store";
 
 export async function POST(request: Request) {
   try {
-    configureAuthSecret(env.AUTH_SECRET);
-    if (!env.AUTH_SECRET && !process.env.AUTH_SECRET && !process.env.JWT_SECRET) {
-      return Response.json({ error: "Authentication is not configured." }, { status: 503 });
-    }
-    const body = (await request.json()) as {
-      email?: string;
-      password?: string;
-      fullName?: string;
-      studentId?: string;
-      role?: "student" | "technician" | "admin";
-    };
+    const body = await readAuthJson(request);
 
-    const email = body.email?.trim().toLowerCase();
-    const password = body.password?.trim();
-    const fullName = body.fullName?.trim();
-    const studentId = body.studentId?.trim();
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
+    if (body.studentId != null && typeof body.studentId !== "string") {
+      return Response.json({ error: "studentId must be a string." }, { status: 400 });
+    }
+    const studentId = typeof body.studentId === "string" ? body.studentId.trim() : undefined;
     // Public registration can only create student accounts. Staff roles must
     // be provisioned by an administrator or the seed process.
     const role = "student" as const;
@@ -52,7 +46,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const db = getDb();
+    const dbBinding = env.DB;
+    if (!dbBinding) throw new Error("Cloudflare D1 binding `DB` is unavailable.");
+    const db = getDb(dbBinding);
     const [existing] = await db
       .select({ id: users.id })
       .from(users)
@@ -79,13 +75,7 @@ export async function POST(request: Request) {
       })
       .returning();
 
-    const token = await createSessionToken({
-      userId: inserted.id,
-      email: inserted.email,
-      fullName: inserted.fullName,
-      studentId: inserted.studentId ?? undefined,
-      role: inserted.role,
-    });
+    const token = await createStoredSession(dbBinding, inserted.id);
 
     const userProfile = {
       id: inserted.id,
@@ -104,7 +94,6 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return Response.json({ error: message }, { status: 500 });
+    return authErrorResponse(error);
   }
 }

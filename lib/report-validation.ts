@@ -27,6 +27,7 @@ export const createReportSchema = z
     bookingId: positiveId.optional(),
     issueType: z.string().trim().min(1).max(120).optional(),
     description: z.string().trim().min(1).max(4_000),
+    attachmentIds: z.array(z.number().int().positive()).max(3).optional(),
   })
   .superRefine((value, context) => {
     if (value.category === "room" && value.roomId === undefined) {

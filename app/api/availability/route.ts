@@ -6,9 +6,12 @@ import {
   getInstitutionNow,
   isStartInPast,
   isValidCalendarDate,
+  normalizeEndMinutes,
+  timeToMinutes,
   type TimePeriod,
 } from "@/lib/booking-engine";
 import { bookingInstant } from "@/lib/room-readiness";
+import { getCurrentBookingPolicy } from "@/lib/booking-policy";
 
 export async function GET(request: Request) {
   try {
@@ -56,6 +59,10 @@ export async function GET(request: Request) {
     const roomClosed = roomState?.readinessState === "closed";
 
     const now = getInstitutionNow();
+    const policy = await getCurrentBookingPolicy(db.$client);
+    const policyOpening = timeToMinutes(policy.openingTime);
+    const policyClosing = normalizeEndMinutes(policy.closingTime);
+    const policyLimit = Date.parse(`${now.date}T00:00:00Z`) + policy.advanceDays * 86_400_000;
     const isPastDate = dateParam < now.date;
     const isToday = dateParam === now.date;
 
@@ -149,12 +156,13 @@ export async function GET(request: Request) {
       const passed =
         isPastDate || (isToday && isStartInPast(dateParam, slot.startTime, now));
       const slotStart = bookingInstant(dateParam, slot.startTime);
-      const slotEnd = bookingInstant(dateParam, slot.endTime);
+      const slotEnd = bookingInstant(dateParam, slot.endTime, true);
       const closed = roomClosed || closures.results.some((closure) => Date.parse(closure.startsAt) < slotEnd && Date.parse(closure.endsAt) > slotStart);
+      const outsidePolicyWindow = timeToMinutes(slot.startTime) < policyOpening || normalizeEndMinutes(slot.endTime) > policyClosing || Date.parse(`${dateParam}T00:00:00Z`) > policyLimit;
       return {
         ...slot,
         status:
-          closed && slot.status === "available" ? ("maintenance" as const) : passed && slot.status === "available" ? ("booked" as const) : slot.status,
+          (closed || outsidePolicyWindow) && slot.status === "available" ? ("maintenance" as const) : passed && slot.status === "available" ? ("booked" as const) : slot.status,
         passed,
         bookedBy: slot.status === "booked" ? (bookedByBySlotId.get(slot.id) ?? null) : null,
       };

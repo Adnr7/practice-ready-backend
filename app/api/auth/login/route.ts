@@ -3,22 +3,19 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import {
+  authErrorResponse,
   createSessionCookie,
-  createSessionToken,
-  configureAuthSecret,
+  readAuthJson,
   verifyPassword,
 } from "@/lib/auth";
+import { createStoredSession } from "@/lib/session-store";
 
 export async function POST(request: Request) {
   try {
-    configureAuthSecret(env.AUTH_SECRET);
-    const body = (await request.json()) as {
-      email?: string;
-      password?: string;
-    };
+    const body = await readAuthJson(request);
 
-    const email = body.email?.trim().toLowerCase();
-    const password = body.password?.trim();
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
 
     if (!email || !password) {
       return Response.json(
@@ -27,14 +24,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const db = getDb();
+    const dbBinding = env.DB;
+    if (!dbBinding) throw new Error("Cloudflare D1 binding `DB` is unavailable.");
+    const db = getDb(dbBinding);
     const [user] = await db
       .select()
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
 
-    if (!user) {
+    if (!user || !user.isActive) {
       return Response.json(
         { error: "Invalid email or password." },
         { status: 401 }
@@ -49,13 +48,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const token = await createSessionToken({
-      userId: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      studentId: user.studentId ?? undefined,
-      role: user.role,
-    });
+    const token = await createStoredSession(dbBinding, user.id);
 
     const userProfile = {
       id: user.id,
@@ -70,11 +63,10 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-            "Set-Cookie": createSessionCookie(token, new URL(request.url).protocol === "https:"),
+        "Set-Cookie": createSessionCookie(token, new URL(request.url).protocol === "https:"),
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return Response.json({ error: message }, { status: 500 });
+    return authErrorResponse(error);
   }
 }

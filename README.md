@@ -4,7 +4,7 @@
 
 Practice Ready is a student and facilities application for Music Practice Rooms (MPRs) at the True School of Music (TSM). This repository extends the original HCI prototype with a TypeScript backend on Cloudflare Workers and D1.
 
-**Current status:** interactive prototype plus a partially integrated backend. Live availability, reservation, equipment, schedule and booking-status paths now exist, but account boundaries, full booking lifecycle support and several V1 workflows still need implementation. The target is all **17 features** in the supplied V1 scope diagram.
+**Current status:** the core student and staff workflows have persistent D1 implementations and live UI connections. Reservations, journals/photos, reports, suitability, movements, policy/contact reads, and a staff workspace are available locally. The full local suite passes **173 tests**. This is not a production-release or complete original-frontend parity claim: browser acceptance, remaining legacy discovery paths, and staging rollout are still open. See [current state](docs/CURRENT_STATE.md).
 
 ## Start with the project documents
 
@@ -42,8 +42,8 @@ The first pilot contains the research's four Must-Haves: **1, 2, 6 and 7**, supp
 - **TypeScript, React 19, Tailwind CSS** and existing UI components.
 - **Vinext / Vite**, using Next.js-style App Router pages and API handlers.
 - **Cloudflare Workers + D1 (SQLite)**, with Drizzle ORM and SQL migrations.
-- Current **WebCrypto credential/session helpers**; the target architecture adds revocable sessions and stronger account boundaries.
-- **Node's test runner** for existing unit tests; real Worker/D1 integration and browser suites are planned.
+- **WebCrypto credentials and opaque, revocable D1 sessions**; active accounts and current roles are checked on protected requests.
+- **Node's test runner**, real Worker/D1 integration, concurrent write tests, and tracked migration rehearsals; browser automation remains open.
 
 ```text
 app/page.tsx             Main prototype UI; live inventory/session reads plus prototype journeys
@@ -66,53 +66,47 @@ vite.config.ts           Vinext and Cloudflare build configuration
 
 ### Prerequisites
 
-- **Node.js >=22.13.0**; baseline checks used Node 22.22.0.
-- **pnpm 11.25.0**, pinned in `package.json`. Commands below use Corepack; if Corepack is unavailable, install the pinned pnpm version and replace `corepack pnpm` with `pnpm`.
-- Git. Cloudflare credentials are needed for remote resources, not the local D1 preview below.
+- Linux, **Node.js 22.23.3** (`.nvmrc`), Corepack, GNU Make, and Git. With an existing nvm installation, run `nvm install && nvm use` in this checkout.
+- **pnpm 11.25.0**, pinned in the existing `package.json`; keep `pnpm-lock.yaml` and use frozen installs. Setup uses Corepack without enabling global shims or installing global packages. Package-manager downloads, dependency store, and caches stay under `.sites-runtime/` in this checkout.
+- The first setup needs registry access. Local migration/run/test commands need installed dependencies and loopback networking for workerd, but no Cloudflare credentials or Internet access. The Dockerfile includes the Linux system packages needed by this workflow.
 
-Clone this repository, open a terminal in its root, then run:
-
-```bash
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-```
-
-Configure local/runtime secrets before using authentication or seeding:
+Clone the repository, enter its root, and run:
 
 ```bash
-cat > .dev.vars <<'EOF'
-AUTH_SECRET=replace-with-a-long-random-session-secret
-SEED_TOKEN=replace-with-a-separate-seed-token
-ADMIN_PASSWORD=replace-with-a-strong-admin-password
-# Optional demo student account:
-# STUDENT_PASSWORD=replace-with-a-strong-student-password
-EOF
+make setup
+cp .env.example .dev.vars
 ```
 
-For Cloudflare deployment, store these values with `wrangler secret put`
-instead of committing them. Public registration always creates student
-accounts; technician and admin accounts are provisioned by an administrator or
-the seed process.
+Replace the placeholders in the ignored `.dev.vars` with separate local values. `ADMIN_PASSWORD` must contain at least 12 characters; `STUDENT_PASSWORD` is optional. Never commit the populated file. `.env.example` is a template: Wrangler reads **`.dev.vars`**, not that template.
 
-### Initialize an empty local database
+`make setup-offline` repeats the frozen install without network access **after** this checkout's Corepack cache and pnpm store have been populated. It fails if a required package/tool is absent. Ordinary `make test` does not run an install or invoke Corepack at all.
 
-The current SQL lives under `drizzle/`, and root Wrangler configuration sets `migrations_dir` to `drizzle`. For a **new, empty local database**, apply the checked-in migrations explicitly, in order:
+To rehearse a completely clean dependency installation without replacing the working checkout's `node_modules`, run `node scripts/rehearse-setup.mjs`. It installs into a disposable directory under `.sites-runtime/`, verifies an offline rerun and unchanged lockfile, then removes the disposable installation. This explicit setup rehearsal needs registry access on its first pass and is separate from `make test`.
+
+### Apply local migrations and run
+
+Use the tracked runner for both a fresh database and a clean tracked upgrade:
 
 ```bash
-for migration in drizzle/0000_lush_misty_knight.sql drizzle/0001_new_the_hood.sql drizzle/0002_open_layla_miller.sql drizzle/0003_amusing_nekra.sql drizzle/0004_equipment_movements.sql drizzle/0005_reservation_lifecycle.sql drizzle/0006_room_readiness.sql; do
-  corepack pnpm exec wrangler d1 execute practice_ready_db --local --persist-to .wrangler/state --file "$migration"
-done
+make db-preflight
+make db-migrate
+make db-migrate
+make build
+make start
 ```
 
-These bootstrap commands are not idempotent: skip them if these tables already exist. They also do not populate Wrangler's migration ledger. Do not use `db:generate` as a substitute for applying an existing migration. A staging/production D1 rollout must apply the same sequence through Wrangler after taking a backup.
+The second apply reports **No migrations to apply**. The runner validates the journal/SQL sequence, runs preflight, then invokes the project's pinned `wrangler d1 migrations apply DB --local`. SQL `0000` through `0010` is applied in numeric order; each complete migration and its `d1_migrations` ledger insertion run in one D1 transaction. A failed migration rolls back; earlier successful migrations remain tracked. Wrangler's ledger records filenames, not SQL checksums: the corrected `0003` described below only runs where that migration is still pending. Never remove an applied ledger entry to force a replay.
 
-Start the built application against the local Worker/D1 state:
+Default persistence is `.wrangler/state`, shared by migrate and the built preview. Override **both** commands together for an isolated environment:
 
 ```bash
-corepack pnpm start --port 8787
+make db-migrate STATE=.wrangler/rehearsal
+make start STATE=.wrangler/rehearsal PORT=8788
 ```
 
-Open **http://127.0.0.1:8787**. In a second terminal, initialize the **local demo** dataset and verify a read:
+The `db:migrate` and `db:preflight` package scripts are aliases; extra runner arguments are `--persist-to DIRECTORY` and `--json` (preflight only). The runner supports local databases only. It takes a per-state `.migration.lock`; after an interrupted process, remove a stale lock only after confirming no other runner is active. Stop application writers during an upgrade. Preflight reads application data/schema without modifying them; opening a fresh local emulator creates its persistence files.
+
+Open **http://127.0.0.1:8787**. In a second terminal, optionally initialize the **local demo** and verify a read:
 
 ```bash
 SEED_TOKEN=replace-with-the-value-from-.dev.vars
@@ -121,72 +115,116 @@ curl --fail-with-body -X POST http://127.0.0.1:8787/api/seed \
 curl --fail-with-body http://127.0.0.1:8787/api/rooms
 ```
 
-The seed requires either an administrator session or the configured seed token,
-and `ADMIN_PASSWORD` is required when bootstrapping the administrator. It
-creates illustrative inventory for local evaluation, not production
-provisioning. The checked baseline produced 5 rooms, 8 locations, 32 assets
-and 2,520 slots for 14 days. Use IDs returned by the API: room names do not
-equal database IDs.
+The seed requires an administrator session or the configured seed token, and `ADMIN_PASSWORD` when bootstrapping the administrator. It creates illustrative inventory for local evaluation. Public registration creates student accounts; staff accounts require administrator provisioning. Use room/location IDs returned by the API.
+
+### Legacy database preflight and migration-generation boundary
+
+```bash
+make db-preflight STATE=.wrangler/state
+node scripts/migrate.mjs preflight --persist-to .wrangler/state --json
+```
+
+A nonzero exit blocks apply and reports concrete rows/object names for:
+
+- Existing application tables without a ledger, unknown/out-of-order/missing ledger entries, or a schema that differs from the exact tracked migration prefix (including partial table/column/index/trigger changes).
+- Duplicate room/date/start slots, duplicate booking-slot links, overlapping confirmed bookings, or multiple confirmed bookings claiming the same canonical slot.
+- Rooms without matching location codes before `0006`, or null/nonexistent location IDs after `0006`; and existing foreign-key violations.
+- Legacy report categories/statuses or history statuses incompatible with the CHECK constraints added by `0003`. Valid populated history is supported; nullable history statuses remain valid. Preflight reports incompatible values without rewriting them.
+
+**Corrected `0003` populated upgrades:** the original migration rebuilt the child table before dropping its parent; in a D1 migration transaction, `PRAGMA foreign_keys=OFF` was ineffective and the parent drop cascaded deletion of report history. The corrected SQL keeps foreign keys enabled, stages history in a table without foreign keys, removes the old child before rebuilding the parent, then restores all history into the constrained child table. Every report/history column, ID, timestamp, nullable value, relationship, and AUTOINCREMENT high-water mark is preserved. Wrangler applies the complete rebuild plus its ledger row atomically; invalid legacy report/history statuses or report categories cause rollback of schema, data, staging tables, sequences, and the ledger insertion.
+
+**Historical recovery:** databases whose ledger already contains `0003_amusing_nekra.sql` will not rerun it. This correction cannot recover history deleted by the old version. Restoring historically lost data requires a pre-migration backup and an owner-reviewed recovery on a disposable copy before applying it to a live database; do not delete ledger rows or force migration replay to attempt recovery.
+
+The old explicit `d1 execute --file` loop created **untracked** databases. Do not replay it, reset a populated database, insert guessed ledger rows, delete duplicates, or automatically choose booking/location owners. Back up first, inspect schema/data with the owner, and develop an explicit reviewed reconciliation/baseline plan on a disposable copy. The runner deliberately offers no automatic adoption, reset, or destructive reconciliation. A schema-only export is insufficient for the data checks. Read-only preflight cannot recover history already lost by an earlier migration.
+
+**`db:generate` is explicitly disabled** and exits unsuccessfully. Snapshots exist only through `0003`, although the journal and SQL continue through `0010`; invoking Drizzle generation directly can recreate existing objects and omit hand-written constraints/triggers. Apply the existing SQL with `make db-migrate`. Re-enable generation only after repairing/reviewing the complete snapshot chain against a freshly migrated D1 database and proving unchanged schema produces no generated migration. Never use generation as bootstrap.
 
 ### Development and checks
 
 ```bash
-corepack pnpm dev
-corepack pnpm test
-corepack pnpm exec tsc --noEmit
-corepack pnpm lint
-corepack pnpm build
+make test
+make test-migrations
+make typecheck
+make lint
+make build
+make smoke-built
+make dev
 ```
 
-Portable `dev` selects port 5173. The build/preview workflow above was verified for local API/database work; check the effective `DB` binding when using a different execution profile.
+**The single offline test command is `make test`**, after setup. It runs Node's test runner and the installed Wrangler/Miniflare/workerd tools, disables Cloudflare metadata fetch and telemetry, and does not download anything. Migration tests create/remove isolated OS-temp databases; they never apply SQL to the developer's `.wrangler/state`. They exercise real Wrangler fresh apply/rerun, transactional rollback with the ledger, preserved data, and blocked legacy states. Existing business-test migration lists are retained; the new shared helpers are in `scripts/migration-tools.mjs` for a coordinated future extraction.
+
+Portable `make dev` selects port 5173. Use the **built** `make start` preview for D1 workflows; Vite's development binding overrides differ from the root Wrangler configuration. Confirm the generated `dist/server/wrangler.json` binds `DB` to the intended database before preview/deployment.
 
 | Script | Meaning |
 |---|---|
+| `install:ci` | Node 22.23.3 check and project-local pnpm 11.25.0 frozen installation |
 | `dev` | Development server through the repository's framework wrapper |
 | `build` | Build Worker/server and browser assets |
 | `start` | Run the built Worker locally using `dist/server/wrangler.json` and `.wrangler/state` |
-| `test` | Node unit tests plus D1-backed booking and movement integration tests |
-| `lint` | ESLint; baseline findings are listed below |
-| `db:generate` | Generate SQL after changing `db/schema.ts`; review generated changes |
-| `db:migrate` | Currently invokes Drizzle migration without a configured database target; use the documented local bootstrap until P0 completes migration setup |
+| `test` / `test:migrations` | Offline full suite / isolated migration suite |
+| `lint` | ESLint |
+| `db:generate` | Blocked until Drizzle snapshots are repaired |
+| `db:preflight` | Inspect tracked/legacy local state and report blockers |
+| `db:migrate` | Preflight, tracked local apply, and post-apply verification |
+
+### Docker local preview
+
+```bash
+docker build -t practice-ready:local .
+docker volume create practice-ready-d1
+docker run --rm -p 127.0.0.1:8787:8787 \
+  --mount type=volume,src=practice-ready-d1,dst=/app/.wrangler/state \
+  --mount "type=bind,src=$(pwd)/.dev.vars,dst=/app/.dev.vars,readonly" \
+  practice-ready:local
+```
+
+The pinned Node image installs all dependencies using the existing frozen lockfile, runs `make test`, then builds. Container startup preflights/applies local migrations and serves the built Worker on port 8787; the volume retains D1 state across restarts. `.dockerignore` excludes local secrets, dependency trees, developer databases and caches. The image needs network access to build; its installed test suite and local migration/preview workflow do not need cloud access. This is the containerized local preview, while Cloudflare Workers is the deployment target.
+
+### Setup verification — 2026-10-18
+
+`node scripts/rehearse-setup.mjs` passed a clean frozen install of 628 packages with pnpm 11.25.0, followed by an offline rerun; the lockfile was unchanged. The integrated suite passes **173 tests**, including **12 migration tests**, with typecheck/lint passing. The `0003` populated upgrade preserves every report/history column and ID with foreign keys ON. `node scripts/smoke-built.mjs` exercises the actual built Worker with disposable secrets and isolated D1 state, then removes that state. Earlier full smoke runs passed, but the latest pre-publication run and retry fail at Home SSR with Miniflare `Network connection lost` (HTTP 500); this remains a preview/release blocker. Docker is unavailable here, so Docker build/run remains unverified.
 
 ### Configuration
 
 | Setting / file | Current meaning |
 |---|---|
 | `DB` | Cloudflare D1 binding expected by `db/index.ts` |
-| `AUTH_SECRET` | Required session-signing secret; takes precedence over `JWT_SECRET` |
-| `JWT_SECRET` | Legacy alternative used by current auth code |
+| `AUTH_SECRET` | Secret for remaining legacy credential/session-signing helpers; current revocable sessions are stored in D1 |
+| `JWT_SECRET` | Legacy fallback for signing helpers; prefer `AUTH_SECRET` |
 | `SEED_TOKEN` | Optional bearer token for controlled local/operator seeding |
 | `ADMIN_PASSWORD` | Required, 12+ characters, when the seed bootstraps the admin |
 | `STUDENT_PASSWORD` | Optional password for the local demo student account |
-| `.dev.vars` | Local Worker secrets file; ignored and never commit it |
+| `.env.example` / `.dev.vars` | Checked-in placeholders / ignored local Worker secrets |
 | `wrangler.json` | Worker identity and a specific D1 database ID; remote environments need their own bindings |
 | `.openai/hosting.json` | Inherited hosting metadata naming `DB` |
 
-Authentication now fails closed when no secret is configured. Do not treat
-local seed accounts or the inherited Sites sign-in mock as operational
-authentication; the application uses its own `pr_session` cookie.
+The application uses its own `pr_session` cookie and D1 session records. The inherited Sites sign-in mock does not provision an operational application account.
 
 ## Existing API routes
 
-This table describes **current code**, not the proposed final contract. Responses and authorization will change as the planned foundations are implemented.
+This table describes the implemented backend contract. The original frontend still needs to consume some of the newer workflows directly.
 
 | Method | Route | Current behavior |
 |---|---|---|
 | POST | `/api/auth/register` | Creates a student account/session; submitted technician/admin roles are ignored |
 | POST | `/api/auth/login` | Credential login and session cookie |
-| POST | `/api/auth/logout` | Clears the session cookie |
-| GET | `/api/auth/me` | Current profile or null user |
+| POST | `/api/auth/logout` | Revokes the current D1 session and clears its cookie |
+| GET/PATCH | `/api/auth/me` | Current active profile; authenticated users can update name and phone |
 | GET | `/api/rooms` | Public active-room list |
 | GET | `/api/availability?roomId=&date=YYYY-MM-DD` | Public slots grouped by period; may generate missing slots |
-| POST | `/api/bookings` | Validates and reserves slots through the D1 booking store; still accepts evaluation guest requests |
+| POST | `/api/bookings` | Authenticated, validated booking creation with optional `Idempotency-Key` replay protection |
 | GET | `/api/bookings?filter=upcoming\|past` | Own bookings, all for staff; unauthenticated requests return an empty list |
+| GET | `/api/bookings/:id` | Owner/staff booking detail with lifecycle/session state |
+| PATCH | `/api/bookings/:id/reschedule` | Owner/staff reschedule with conflict checks and history |
 | DELETE | `/api/bookings/:id` | Owner/staff cancellation with a start-time cutoff and transactional slot release |
+| POST | `/api/bookings/:id/end-session` | Owner/staff session close with history |
+| GET/PUT | `/api/bookings/:id/journal` | Student practice journal persistence with owned attachments |
+| GET | `/api/bookings/:id/history` | Owner/staff booking, usage, movement, and report history |
 | GET | `/api/bookings/status?ref=` | Returns the current booking phase for the active-reservation card |
 | GET | `/api/equipment?query=&type=&locationId=&status=` | Public inventory search/filter |
 | GET | `/api/equipment/room/:roomId` | Default room equipment grouped by readiness |
-| PATCH | `/api/equipment/:id` | Technician/admin condition/location update |
+| POST | `/api/equipment` | Technician/admin equipment catalog creation |
+| PATCH | `/api/equipment/:id` | Validated, audited catalog/archive changes; physical moves must use the movement ledger |
 | POST | `/api/equipment/:id/movements` | Authenticated user records a move and atomically updates the current location |
 | GET | `/api/movements?mine=true` | Authenticated user's persistent movement history; staff may request all movements with `mine=false` |
 | POST | `/api/movements/:id/return` | Owner or staff records a return to the original location and creates a return event |
@@ -197,31 +235,88 @@ This table describes **current code**, not the proposed final contract. Response
 | GET | `/api/reports` | Authenticated current-user report list |
 | GET | `/api/reports/:id` | Authenticated owner or staff report detail with update history |
 | PATCH | `/api/reports/:id` | Technician/admin status and message update |
+| POST | `/api/attachments` | Authenticated small image attachment storage |
+| GET | `/api/attachments/:id` | Owner/staff attachment retrieval |
+| GET | `/api/policies/current` or `/api/policy/current` | Current booking and equipment-handling policy |
+| GET | `/api/support/contact` | Published support contact directory |
+| GET | `/api/locations` | Public location directory |
+| GET | `/api/practice-profiles` | Active practice profiles and requirements |
+| POST | `/api/practice-profiles` | Administrator practice profile creation |
+| GET | `/api/staff/students` | Technician/admin student lookup |
+| GET | `/api/staff/audit` | Technician/admin audit-event listing |
+| GET/POST | `/api/staff/locations` | Technician/admin location listing and creation |
+| PUT | `/api/staff/rooms/:id/profiles` | Administrator room/practice-profile suitability state |
+| PUT | `/api/staff/practice-profiles/:id/requirements` | Administrator replacement of profile requirements |
+| GET/POST/PATCH | `/api/staff/operations` | Staff workspace data and audited room catalog create/edit/archive |
+| POST | `/api/staff/reports/:id/action` | Atomic report-to-repair or report-to-closure with conflict/version checks |
+| GET/PUT | `/api/staff/movement-permissions` | Staff designation/revocation of exact equipment/destination pairs |
+| GET | `/api/equipment/:id/movements?bookingId=` | Permitted destinations for the active owner, all destinations for staff |
 
-Rescheduling, usage logs, repair tracking, suitability, reports and support requests require new endpoints/workflows. See the [target API design](docs/ARCHITECTURE.md).
+Use **Home → Practice Fit & Rules**, **My Reservations → History & journal**, **Reports & Support**, and **Staff Workspace** to reach the connected flows. Student movement permission defaults to denied until staff designate an equipment/destination pair. Repair completion requires the latest passed inspection tied to that repair; it resolves the linked report atomically and never treats an ETA as an actual return.
 
-## Verification snapshot — 2026-10-04
-
-Checks were run against backend baseline `d0f1682` while preparing these documents:
+## Verification snapshot — 2026-10-18
 
 | Check | Result |
 |---|---|
 | Frozen dependency installation | Passed with pnpm 11.25.0 |
-| `npm test` | **13 passed**, 0 failed |
-| `corepack pnpm exec tsc --noEmit` | Passed |
-| `corepack pnpm build` | Passed; reported a large client-chunk warning |
-| `corepack pnpm lint` | **20 existing errors, 22 warnings**; tracked in P0 |
-| Local D1 schema / built Worker / seed / room reads | Passed using the bootstrap/preview commands above |
-| Concurrent API writes / browser acceptance / remote deployment | Not verified by these baseline checks; explicit implementation release gates |
+| `make test` | **173 passed**, 0 failed; no cloud/network dependency after setup |
+| `make typecheck` | Passed |
+| `make build` | Passed; large client-chunk warning remains |
+| `make lint` | Passed with 4 existing `no-img-element` warnings |
+| `make smoke-built` | Build passed; latest smoke and retry failed at Home SSR with Miniflare network loss (HTTP 500), despite earlier passing runs |
+| Concurrent writes | Covered: booking claims, same-key creation, room closure versus booking, cross-room student overlap, movement revocation and repair updates |
+| Browser acceptance / Docker / remote deployment | Not verified |
 
-The current conflict test operates on arrays sequentially. It does not establish database concurrency safety. The booking UI now uses the backend session when one exists, while anonymous booking remains supported by the current backend route. Equipment directory and room setup reads use the live API by default; the legacy fixture presentation is available only with the explicit `?demo=1` query parameter (or `NEXT_PUBLIC_DEMO_PRESENTATION=true`). Other fixture-backed prototype journeys and unsupported booking lifecycle flows remain outside this integration.
+Tests cover real route ownership/roles, revocable sessions, journal/image persistence, exact replay/expiry/rollback, report-to-repair/closure actions, inspection safety, and clean/populated migration paths. The built-Worker Home SSR check is currently failing while policy API reads and local seeding succeed. Resolve that preview failure before browser/staging acceptance; passing API/unit tests do not prove the application is release-ready.
 
 ## Deployment direction
 
 Host the application/API on Cloudflare Workers and its database on D1. GitHub Pages is appropriate for the research case study, not the operational backend.
 
-The release workflow is: complete P0/P1 foundations → configure separate staging/production resources and secrets → apply tracked migrations → build → deploy with the generated Worker configuration → run authenticated smoke/concurrency checks. The [architecture](docs/ARCHITECTURE.md) describes migration, rollback and restore requirements. The `start` script previews locally; it does not publish a Worker.
+The commands below are **operator steps**, requiring Cloudflare access; no remote migrations or deployment were run during local setup verification.
+
+1. Complete local checks and a build: `make setup && make test && make typecheck && make lint && make build`. Keep staging and production databases/Worker names distinct.
+2. Authenticate the **installed** CLI (`node node_modules/wrangler/bin/wrangler.js login`), or provide `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` through your deployment environment. Create a staging database:
+
+   ```bash
+   node node_modules/wrangler/bin/wrangler.js d1 create practice-ready-staging
+   cp dist/server/wrangler.json dist/server/wrangler.deploy.json
+   ```
+
+   In the copied JSON, set `name` to `practice-ready-staging`. Set/add its `d1_databases` entry with `binding: "DB"`, `database_name: "practice-ready-staging"`, `database_id` equal to the ID returned by `d1 create`, and `migrations_dir: "../../drizzle"`. Remove a stale `preview_database_id`. Preserve generated `main`, assets, compatibility settings, and other required bindings. Use `dist/server/wrangler.deploy.json` for **all** remaining commands; do not deploy the root's inherited database ID by accident. Recreate this deployment copy after every build, since `dist/` is generated.
+3. For an existing database, stop writers and take a full data/schema/ledger backup. Export with:
+
+   ```bash
+   node node_modules/wrangler/bin/wrangler.js d1 export DB --remote \
+     --config dist/server/wrangler.deploy.json --output .wrangler/predeploy-backup.sql
+   node node_modules/wrangler/bin/wrangler.js d1 execute DB --local \
+     --config wrangler.json --persist-to .wrangler/predeploy-audit \
+     --file .wrangler/predeploy-backup.sql
+   make db-preflight STATE=.wrangler/predeploy-audit
+   make db-migrate STATE=.wrangler/predeploy-audit
+   make db-migrate STATE=.wrangler/predeploy-audit
+   ```
+
+   Start with a **new disposable** audit state directory for each backup, not a previously migrated audit DB. Store the backup securely outside the image and verify the export includes `d1_migrations`; an absent ledger, drift, conflicts, unmapped rooms, or incompatible legacy report/history values requires an explicit owner-reviewed recovery/baseline plan. Do not bypass blockers by guessing migration entries. Validate important record counts/history on the upgraded copy; preflight is not a substitute for business-invariant review. If the old `0003` has already deleted history, recovery requires a pre-migration backup as described above. For a genuinely new empty remote database, rehearse with `make test-migrations` instead of restoring an export.
+4. Apply tracked remote migrations, then list the ledger-backed state:
+
+   ```bash
+   node node_modules/wrangler/bin/wrangler.js d1 migrations apply DB --remote --config dist/server/wrangler.deploy.json
+   node node_modules/wrangler/bin/wrangler.js d1 migrations list DB --remote --config dist/server/wrangler.deploy.json
+   ```
+
+   Direct Wrangler remote apply does not run this repository's local preflight; the restored-backup rehearsal in step 3 is required for populated databases. Keep writers stopped between the snapshot/rehearsal and remote apply so the audited data does not change.
+5. Set secrets interactively (never place actual secrets in this README or a tracked file), then publish the built Worker:
+
+   ```bash
+   node node_modules/wrangler/bin/wrangler.js secret put AUTH_SECRET --config dist/server/wrangler.deploy.json
+   node node_modules/wrangler/bin/wrangler.js secret put SEED_TOKEN --config dist/server/wrangler.deploy.json
+   node node_modules/wrangler/bin/wrangler.js secret put ADMIN_PASSWORD --config dist/server/wrangler.deploy.json
+   node node_modules/wrangler/bin/wrangler.js deploy --config dist/server/wrangler.deploy.json
+   ```
+
+   Provision real inventory/staff through controlled operator workflows. Test sign-in, room reads, a booking/readback, logout revocation, and applicable staff workflows on staging before repeating with a separate production configuration/database. `make start` is a local preview and never publishes a Worker. There are no automatic down migrations: follow the reviewed backup/restore or forward-fix plan in the [architecture](docs/ARCHITECTURE.md).
 
 ## Next development milestone
 
-Begin with **P0 and P1** in the [implementation plan](docs/IMPLEMENTATION_PLAN.md): repeatable migration/CI setup, account boundaries, canonical room/time identities and atomic bookings. Then connect the four MVP journeys before adding the rest of V1.
+Complete the remaining original discovery/navigation parity (dynamic rooms and user-selected band instrumentation), browser journeys and cold-start investigation; add production login throttling/account recovery, configuration edit coverage, and staging backup/migration/deployment rehearsal. Existing untracked databases must be reconciled on a backed-up copy rather than reset or guessed into the ledger.

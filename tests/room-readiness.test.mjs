@@ -12,7 +12,7 @@ const wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
 const { Miniflare } = wranglerRequire("miniflare");
 const migrations = [
   "0000_lush_misty_knight.sql", "0001_new_the_hood.sql", "0002_open_layla_miller.sql",
-  "0003_amusing_nekra.sql", "0004_equipment_movements.sql", "0005_reservation_lifecycle.sql", "0006_room_readiness.sql",
+  "0003_amusing_nekra.sql", "0004_equipment_movements.sql", "0005_reservation_lifecycle.sql", "0006_room_readiness.sql", "0007_frontend_workflows.sql",
 ];
 
 async function applyMigrations(db) {
@@ -87,7 +87,7 @@ describe("Persistent room readiness, repairs, and suitability", () => {
     const completed = await updateRepair(db, { repairId: repair.id, actor: technician, stage: "completed", inspectionId: inspection.id, publicMessage: "Inspected and returned to service." });
     assert.equal(completed.stage, "completed");
     assert.equal((await listRepairs(db, 1))[0].overdue, false);
-    assert.equal((await db.prepare("SELECT status FROM equipment WHERE id = 1").first()).status, "ready");
+    assert.equal((await db.prepare("SELECT status FROM equipment WHERE id = 1").first()).status, "away", "Completing a repair does not return a mixer from location 2 to its default location 1.");
   });
 
   it("explains a partial amplified-vocal match when the room mixer is away", async () => {

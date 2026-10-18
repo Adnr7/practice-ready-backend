@@ -1,11 +1,12 @@
-import { createClearSessionCookie } from "@/lib/auth";
+import { createClearSessionCookie, revokeSessionFromRequest } from "@/lib/auth";
 
 export async function POST(request: Request) {
-  return new Response(JSON.stringify({ success: true }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Set-Cookie": createClearSessionCookie(new URL(request.url).protocol === "https:"),
-    },
-  });
+  const headers = { "Set-Cookie": createClearSessionCookie(new URL(request.url).protocol === "https:") };
+  try {
+    await revokeSessionFromRequest(request);
+    return Response.json({ success: true }, { headers });
+  } catch {
+    // Retain the cookie on failure so a retry can still identify and revoke it.
+    return Response.json({ error: "Unable to revoke session. Please retry logout." }, { status: 500 });
+  }
 }

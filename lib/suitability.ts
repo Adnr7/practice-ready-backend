@@ -1,4 +1,4 @@
-import { RoomReadinessError } from "./room-readiness.ts";
+import { bookingInstant, RoomReadinessError } from "./room-readiness.ts";
 
 const STALE_INSPECTION_MS = 24 * 60 * 60 * 1000;
 
@@ -12,12 +12,6 @@ type Requirement = {
   isHard: number;
   studentSupplied: number;
 };
-
-function bookingInstant(date: string, time: string): number {
-  const minutes = time === "00:00" ? 1440 : Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
-  const [year, month, day] = date.split("-").map(Number);
-  return Date.UTC(year, month - 1, day, 0, minutes) - 330 * 60_000;
-}
 
 function profileCode(input: { profile: string; amplified?: boolean; instrument?: string }): string {
   if (input.profile === "vocal") return input.amplified ? "vocal-amplified" : "vocal-acoustic";
@@ -54,7 +48,7 @@ export async function findSuitableRooms(
     id: number; name: string; code: string; capacity: number; description: string; readinessState: string; readinessNotes: string | null; locationId: number | null; locationName: string | null;
   }>();
   const requestedStart = bookingInstant(input.date, input.startTime);
-  const requestedEnd = bookingInstant(input.date, input.endTime);
+  const requestedEnd = bookingInstant(input.date, input.endTime, true);
   const now = Date.now();
   const result = [];
 
@@ -73,6 +67,17 @@ export async function findSuitableRooms(
       addReason(reasons, "CAPACITY_TOO_SMALL", `This room supports ${room.capacity} people, but the requested party has ${input.partySize}.`);
     }
     const restriction = await db.prepare("SELECT state, explanation FROM room_restrictions WHERE room_id = ? AND activity_key = ? AND is_active = 1 ORDER BY id DESC LIMIT 1").bind(room.id, code).first<{ state: string; explanation: string }>();
+    const practiceType = await db.prepare("SELECT state, explanation FROM room_practice_types WHERE room_id = ? AND profile_id = ? LIMIT 1").bind(room.id, profile.id).first<{ state: string; explanation: string }>();
+    if (practiceType?.state === "unsupported") {
+      hardBlock = true;
+      addReason(reasons, "ROOM_PROFILE_UNSUPPORTED", practiceType.explanation);
+    } else if (practiceType?.state === "restricted") {
+      partial = true;
+      addReason(reasons, "ROOM_PROFILE_RESTRICTED", practiceType.explanation);
+    } else if (practiceType?.state === "unknown") {
+      unverified = true;
+      addReason(reasons, "ROOM_PROFILE_UNVERIFIED", practiceType.explanation);
+    }
     if (restriction?.state === "unsupported") {
       hardBlock = true;
       addReason(reasons, "ROOM_RESTRICTED", restriction.explanation);
@@ -89,7 +94,7 @@ export async function findSuitableRooms(
       addReason(reasons, "ROOM_CLOSED", `Closed during the requested time: ${closure.reason}`);
     }
     const bookings = await db.prepare("SELECT date, start_time AS startTime, end_time AS endTime FROM bookings WHERE room_id = ? AND status = 'confirmed'").bind(room.id).all<{ date: string; startTime: string; endTime: string }>();
-    if (bookings.results.some((booking) => bookingInstant(booking.date, booking.startTime) < requestedEnd && bookingInstant(booking.date, booking.endTime) > requestedStart)) {
+    if (bookings.results.some((booking) => bookingInstant(booking.date, booking.startTime) < requestedEnd && bookingInstant(booking.date, booking.endTime, true) > requestedStart)) {
       hardBlock = true;
       addReason(reasons, "SLOT_UNAVAILABLE", "The room is already reserved for part of this time.");
     }
@@ -97,7 +102,7 @@ export async function findSuitableRooms(
     const equipment = room.locationId === null ? [] : (await db.prepare(`
       SELECT e.id, e.equipment_id AS equipmentCode, e.name, e.type, e.condition, e.status,
         e.current_location_id AS currentLocationId, e.last_inspected_at AS lastInspectedAt
-      FROM equipment e WHERE e.default_room_id = ?
+      FROM equipment e WHERE e.default_room_id = ? AND e.archived = 0
     `).bind(room.id).all<{
       id: number; equipmentCode: string; name: string; type: string; condition: string; status: string; currentLocationId: number | null; lastInspectedAt: string | null;
     }>()).results;

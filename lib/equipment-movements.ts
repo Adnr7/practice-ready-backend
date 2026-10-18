@@ -1,4 +1,12 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import {
+  assertStudentMovementAllowed,
+  MovementPermissionError,
+  requireActiveMovementActor,
+  studentMovementDesignationGuard,
+  studentMovementReturnGuard,
+  studentMovementSessionGuard,
+} from "./movement-permissions.ts";
 
 export type MovementRole = "student" | "technician" | "admin";
 
@@ -27,6 +35,7 @@ export interface MovementRecord {
   returnedByUserId: number | null;
   returnLocationId: number | null;
   notes: string | null;
+  reservationId: number | null;
   correctionReason: string | null;
   updatedAt: string;
   returnEvents: MovementReturnEvent[];
@@ -93,6 +102,7 @@ interface EquipmentRow {
   name: string;
   current_location_id: number;
   status: string;
+  archived: number;
 }
 
 interface LocationRow {
@@ -122,6 +132,7 @@ interface MovementRow {
   returned_by_user_id: number | null;
   return_location_id: number | null;
   notes: string | null;
+  reservation_id: number | null;
   correction_reason: string | null;
   updated_at: string;
 }
@@ -158,6 +169,7 @@ const MOVEMENT_SELECT = `
     m.returned_by_user_id,
     m.return_location_id,
     m.notes,
+    m.reservation_id,
     m.correction_reason,
     m.updated_at
   FROM equipment_movements m
@@ -211,6 +223,7 @@ function mapMovement(row: MovementRow, returnEvents: MovementReturnEvent[] = [])
     returnedByUserId: row.returned_by_user_id === null ? null : Number(row.returned_by_user_id),
     returnLocationId: row.return_location_id === null ? null : Number(row.return_location_id),
     notes: row.notes,
+    reservationId: row.reservation_id === null ? null : Number(row.reservation_id),
     correctionReason: row.correction_reason,
     updatedAt: row.updated_at,
     returnEvents,
@@ -263,11 +276,20 @@ export async function createMovement(
   client: D1Database,
   input: CreateMovementInput,
 ): Promise<MovementRecord> {
+  if (typeof input.equipmentId !== "number" || !Number.isSafeInteger(input.equipmentId) || input.equipmentId <= 0) {
+    throw new MovementError("Equipment id must be a positive integer.", 400, "INVALID_EQUIPMENT_ID");
+  }
+  // Library callers receive the same validation as HTTP callers.
+  input = { ...input, ...parseCreateMovementBody(input) };
+  await requireActiveMovementActor(client, input.actor);
   const equipment = await client.prepare(
-    "SELECT id, equipment_id, name, current_location_id, status FROM equipment WHERE id = ? LIMIT 1",
+    "SELECT id, equipment_id, name, current_location_id, status, archived FROM equipment WHERE id = ? LIMIT 1",
   ).bind(input.equipmentId).first<EquipmentRow>();
   if (!equipment) {
     throw new MovementError("Equipment item not found.", 404, "EQUIPMENT_NOT_FOUND");
+  }
+  if (equipment.archived) {
+    throw new MovementError("Archived equipment cannot be moved.", 409, "EQUIPMENT_ARCHIVED");
   }
 
   const sourceLocation = await requireLocation(client, equipment.current_location_id);
@@ -296,6 +318,8 @@ export async function createMovement(
     );
   }
 
+  if (input.actor.role === "student") await assertStudentMovementAllowed(client, input);
+
   const movedAt = now();
   let results;
   try {
@@ -306,6 +330,9 @@ export async function createMovement(
             status = CASE WHEN status = 'ready' THEN 'away' ELSE status END
         WHERE id = ?
           AND current_location_id = ?
+          AND archived = 0
+          AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role = ? AND is_active = 1)
+          ${input.actor.role === "student" ? `AND ${studentMovementSessionGuard} AND ${studentMovementDesignationGuard} AND ${studentMovementReturnGuard}` : ""}
           AND NOT EXISTS (
             SELECT 1 FROM equipment_movements
             WHERE equipment_id = ? AND status = 'open'
@@ -314,14 +341,17 @@ export async function createMovement(
         input.toLocationId,
         input.equipmentId,
         equipment.current_location_id,
+        input.actor.userId,
+        input.actor.role,
+        ...(input.actor.role === "student" ? [input.bookingId!, input.actor.userId, input.toLocationId, input.expectedReturnAt!, input.expectedReturnAt!, input.bookingId!] : []),
         input.equipmentId,
       ),
       client.prepare(`
         INSERT INTO equipment_movements (
           equipment_id, moved_by_user_id, from_location_id, to_location_id,
-          status, expected_return_at, moved_at, notes, updated_at
+          status, expected_return_at, moved_at, notes, reservation_id, updated_at
         )
-        SELECT ?, ?, ?, ?, 'open', ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?
         FROM equipment
         WHERE id = ? AND current_location_id = ? AND changes() = 1
       `).bind(
@@ -332,6 +362,7 @@ export async function createMovement(
         input.expectedReturnAt ?? null,
         movedAt,
         input.notes ?? null,
+        input.bookingId ?? null,
         movedAt,
         input.equipmentId,
         input.toLocationId,
@@ -609,7 +640,7 @@ export function parseMovementId(value: string): number {
 
 export function parseEquipmentId(value: string): number {
   const id = Number(value);
-  if (!Number.isSafeInteger(id) || id <= 0) {
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(id)) {
     throw new MovementError("Equipment id must be a positive integer.", 400, "INVALID_EQUIPMENT_ID");
   }
   return id;
@@ -617,7 +648,7 @@ export function parseEquipmentId(value: string): number {
 
 function parseOptionalLocationId(value: unknown, fieldName: string): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
-  const id = Number(value);
+  const id = typeof value === "number" ? value : typeof value === "string" && /^[1-9]\d*$/.test(value) ? Number(value) : NaN;
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new MovementError(`${fieldName} must be a positive integer.`, 400, "INVALID_MOVEMENT_INPUT");
   }
@@ -638,10 +669,13 @@ function parseNotes(value: unknown): string | null | undefined {
 
 function parseExpectedReturnAt(value: unknown): string | null | undefined {
   if (value === undefined || value === null || value === "") return value === null ? null : undefined;
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z$/.test(value)) {
+  const match = typeof value === "string" && /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?Z$/.exec(value);
+  if (!match || typeof value !== "string") {
     throw new MovementError("expectedReturnAt must be an ISO 8601 UTC timestamp.", 400, "INVALID_MOVEMENT_INPUT");
   }
-  if (!Number.isFinite(Date.parse(value))) {
+  const timestamp = Date.parse(value);
+  const normalized = `${match[1]}:${match[2] ?? "00"}.${(match[3] ?? "").padEnd(3, "0")}Z`;
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== normalized) {
     throw new MovementError("expectedReturnAt must be a valid timestamp.", 400, "INVALID_MOVEMENT_INPUT");
   }
   return value;
@@ -711,9 +745,9 @@ export async function parseJsonBody(request: Request): Promise<unknown> {
 }
 
 export function movementErrorResponse(error: unknown): Response {
-  if (error instanceof MovementError) {
+  if (error instanceof MovementError || error instanceof MovementPermissionError) {
     return Response.json(
-      { error: error.message, code: error.code, ...(error.details ? { details: error.details } : {}) },
+      { error: error.message, code: error.code, ...(error instanceof MovementError && error.details ? { details: error.details } : {}) },
       { status: error.status },
     );
   }

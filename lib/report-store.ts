@@ -1,4 +1,5 @@
 import type { ReportCategory, ReportStatus } from "./report-validation";
+import { runIdempotentBatch, type IdempotencyRequest } from "./idempotency.ts";
 
 export interface ReportDatabase {
   prepare(query: string): D1PreparedStatement;
@@ -15,6 +16,7 @@ export interface CreateReportInput {
   bookingId?: number;
   issueType?: string;
   description: string;
+  attachmentIds?: number[];
 }
 
 export interface ReportUpdateRecord {
@@ -41,6 +43,7 @@ export interface ReportRecord {
   bookingId: number | null;
   issueType: string | null;
   description: string;
+  attachmentIds: number[];
   status: ReportStatus;
   createdAt: string;
   updatedAt: string;
@@ -48,7 +51,9 @@ export interface ReportRecord {
   updates: ReportUpdateRecord[];
 }
 
-type ReportRow = Omit<ReportRecord, "updates">;
+type ReportRow = Omit<ReportRecord, "updates" | "attachmentIds"> & {
+  attachmentIds: string | number[] | null;
+};
 
 export function generateReportReference(now = new Date()): string {
   const year = now.getUTCFullYear();
@@ -70,6 +75,7 @@ const reportColumns = `
   r.booking_id AS bookingId,
   r.issue_type AS issueType,
   r.description,
+  r.attachment_ids AS attachmentIds,
   r.status,
   r.created_at AS createdAt,
   r.updated_at AS updatedAt,
@@ -108,19 +114,24 @@ async function getUpdates(db: ReportDatabase, reportId: number): Promise<ReportU
 }
 
 function withUpdates(row: ReportRow, updates: ReportUpdateRecord[]): ReportRecord {
-  return { ...row, updates };
+  let attachmentIds: number[] = [];
+  try {
+    const value = typeof row.attachmentIds === "string" ? JSON.parse(row.attachmentIds) : row.attachmentIds;
+    if (Array.isArray(value)) attachmentIds = value.filter((id): id is number => Number.isSafeInteger(id) && id > 0);
+  } catch { attachmentIds = []; }
+  return { ...row, attachmentIds, updates };
 }
 
-export async function createReport(
+function reportInsertStatement(
   db: ReportDatabase,
   input: CreateReportInput,
-): Promise<ReportRecord> {
-  const inserted = await db
+): D1PreparedStatement {
+  return db
     .prepare(`
       INSERT INTO reports
         (reference, reporter_id, category, equipment_id, room_id, location_id,
-         booking_id, issue_type, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         booking_id, issue_type, description, attachment_ids)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `)
     .bind(
@@ -133,13 +144,40 @@ export async function createReport(
       input.bookingId ?? null,
       input.issueType ?? null,
       input.description,
-    )
-    .first<{ id: number }>();
+      JSON.stringify(input.attachmentIds ?? []),
+    );
+}
+
+export async function createReport(
+  db: ReportDatabase,
+  input: CreateReportInput,
+): Promise<ReportRecord> {
+  const inserted = await reportInsertStatement(db, input).first<{ id: number }>();
 
   if (!inserted) throw new Error("Report could not be created.");
   const report = await getReport(db, inserted.id);
   if (!report) throw new Error("Report could not be read after creation.");
   return report;
+}
+
+export async function createReportIdempotently(
+  db: ReportDatabase,
+  input: CreateReportInput,
+  request: IdempotencyRequest,
+): Promise<Response> {
+  const response = await runIdempotentBatch(db, request, [reportInsertStatement(db, input)], {
+    sql: `SELECT json_object('report', json_object(
+      'id', id, 'reference', reference, 'reporterId', reporterId, 'category', category,
+      'equipmentId', equipmentId, 'equipmentName', equipmentName,
+      'roomId', roomId, 'roomName', roomName, 'locationId', locationId, 'locationName', locationName,
+      'bookingId', bookingId, 'issueType', issueType, 'description', description,
+      'attachmentIds', json(attachmentIds), 'status', status, 'createdAt', createdAt,
+      'updatedAt', updatedAt, 'resolvedAt', resolvedAt, 'updates', json('[]')
+    )) AS response_body FROM (${reportQuery("WHERE r.reference = ?", " LIMIT 1")})`,
+    bindings: [input.reference],
+  });
+  if (!response) throw new Error("Report could not be created.");
+  return response;
 }
 
 export async function listReports(

@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
 import { getDb } from "@/db";
 import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
-import { createReport, generateReportReference, listAllReports, listReports, type ReportDatabase } from "@/lib/report-store";
+import { createReport, createReportIdempotently, generateReportReference, listAllReports, listReports } from "@/lib/report-store";
 import { createReportSchema } from "@/lib/report-validation";
+import { IdempotencyError, prepareIdempotencyRequest, replayIdempotentResponse } from "@/lib/idempotency";
 
 function authRequired() {
   return Response.json({ error: "Authentication required." }, { status: 401 });
@@ -111,19 +112,34 @@ export async function POST(request: Request) {
     if (!parsed.success) return validationError(parsed.error);
 
     const db = getDb().$client;
+    const idempotency = await prepareIdempotencyRequest(session.userId, "report.create", request.headers.get("Idempotency-Key"), parsed.data);
+    const replay = await replayIdempotentResponse(db, idempotency);
+    if (replay) return replay;
     const contextFailure = await validateContext(db, parsed.data, session.userId, session.role);
     if (contextFailure) {
       return Response.json({ error: contextFailure.error }, { status: contextFailure.status });
     }
 
-    const report = await createReport(db as ReportDatabase, {
+    if (parsed.data.attachmentIds?.length) {
+      const placeholders = parsed.data.attachmentIds.map(() => "?").join(", ");
+      const owned = await db.prepare(`SELECT count(*) AS count FROM attachments WHERE owner_user_id = ? AND id IN (${placeholders})`).bind(session.userId, ...parsed.data.attachmentIds).first<{ count: number }>();
+      if (Number(owned?.count ?? 0) !== parsed.data.attachmentIds.length) return Response.json({ error: "One or more attachments are not owned by this account." }, { status: 403 });
+    }
+
+    const input = {
       ...parsed.data,
       reference: generateReportReference(),
       reporterId: session.userId,
-    });
+    };
+    if (idempotency) return await createReportIdempotently(db, input, idempotency);
+    const report = await createReport(db, input);
 
-    return Response.json({ report }, { status: 201 });
+    const responseBody = { report };
+    return Response.json(responseBody, { status: 201 });
   } catch (error) {
+    if (error instanceof IdempotencyError) {
+      return Response.json({ error: error.message, code: error.code }, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : "Internal server error";
     return Response.json({ error: message }, { status: 500 });
   }
