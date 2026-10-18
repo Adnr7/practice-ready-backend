@@ -113,6 +113,7 @@ export const bookings = sqliteTable("bookings", {
   guestStudentId: text("guest_student_id"),
   roomId: integer("room_id").notNull().references(() => rooms.id),
   date: text("date").notNull(), // YYYY-MM-DD
+  endDate: text("end_date"), // YYYY-MM-DD; null on legacy rows means date
   startTime: text("start_time").notNull(), // HH:MM
   endTime: text("end_time").notNull(), // HH:MM
   durationMinutes: integer("duration_minutes").notNull(),
@@ -319,6 +320,7 @@ export const bookingPolicies = sqliteTable("booking_policies", {
   openingTime: text("opening_time").notNull().default("00:00"),
   closingTime: text("closing_time").notNull().default("00:00"),
   cancellationCutoffMinutes: integer("cancellation_cutoff_minutes").notNull().default(0),
+  studentWindow: integer("student_window", { mode: "boolean" }).notNull().default(true),
   equipmentHandling: text("equipment_handling").notNull(),
   movementRules: text("movement_rules").notNull(),
   publishedAt: text("published_at").notNull().default(sql`CURRENT_TIMESTAMP`),

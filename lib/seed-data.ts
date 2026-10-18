@@ -31,6 +31,19 @@ export interface SeedEquipment {
   notes?: string;
 }
 
+/** The only locations currently bookable by Asmi students. */
+export const BOOKABLE_ROOM_CODES = [
+  "mpr-2",
+  "mpr-3",
+  "mpr-4",
+  "mpr-5",
+  "studio",
+  "live-room",
+  "mp-lab-2",
+] as const;
+
+export const NON_BOOKABLE_ROOM_CODES = ["performance-hall", "mpr-1", "perf-hall"] as const;
+
 export const SEED_ROOMS: SeedRoom[] = [
   {
     id: 2,
@@ -61,11 +74,25 @@ export const SEED_ROOMS: SeedRoom[] = [
     description: "Guitar & Music Production Suite with Fender electric, bass, and Ampeg amplifier.",
   },
   {
-    id: 1,
-    name: "Performance Hall",
-    code: "perf-hall",
-    capacity: 25,
-    description: "Grand Stage & Large Ensemble Rehearsal Space with Yamaha grand piano and full PA.",
+    id: 6,
+    name: "Studio",
+    code: "studio",
+    capacity: 4,
+    description: "Recording and production studio for focused individual or small-group practice.",
+  },
+  {
+    id: 7,
+    name: "Live Room",
+    code: "live-room",
+    capacity: 8,
+    description: "Live performance and ensemble practice room with monitoring and microphone support.",
+  },
+  {
+    id: 8,
+    name: "MP Lab 2",
+    code: "mp-lab-2",
+    capacity: 4,
+    description: "Music production laboratory for electronic practice, editing, and coursework.",
   },
 ];
 
@@ -74,10 +101,16 @@ export const SEED_LOCATIONS: SeedLocation[] = [
   { id: 2, name: "MPR 3", code: "mpr-3", type: "room" },
   { id: 3, name: "MPR 4", code: "mpr-4", type: "room" },
   { id: 4, name: "MPR 5", code: "mpr-5", type: "room" },
-  { id: 5, name: "Performance Hall", code: "perf-hall", type: "room" },
-  { id: 6, name: "Arts Block A", code: "arts-block-a", type: "block" },
-  { id: 7, name: "MP Lab 1", code: "mp-lab-1", type: "lab" },
-  { id: 8, name: "Central Gear Storage", code: "central-storage", type: "storage" },
+  // Directory-only locations remain available for equipment custody and
+  // movement records, but are deliberately absent from SEED_ROOMS.
+  { id: 5, name: "Performance Hall", code: "perf-hall", type: "venue" },
+  { id: 6, name: "MPR 1", code: "mpr-1", type: "room" },
+  { id: 7, name: "Studio", code: "studio", type: "room" },
+  { id: 8, name: "Live Room", code: "live-room", type: "room" },
+  { id: 9, name: "MP Lab 2", code: "mp-lab-2", type: "lab" },
+  { id: 12, name: "Arts Block A", code: "arts-block-a", type: "block" },
+  { id: 10, name: "MP Lab 1", code: "mp-lab-1", type: "lab" },
+  { id: 11, name: "Central Gear Storage", code: "central-storage", type: "storage" },
 ];
 
 export const SEED_EQUIPMENT: SeedEquipment[] = [

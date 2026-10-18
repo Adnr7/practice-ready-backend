@@ -1,7 +1,8 @@
-import { and, asc, eq, gte, lt, or } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bookings, rooms, users } from "@/db/schema";
+import { rooms } from "@/db/schema";
 import { getInstitutionNow, isValidCalendarDate } from "@/lib/booking-engine";
+import { BOOKABLE_ROOM_CODES } from "@/lib/seed-data";
 
 export async function GET(request: Request) {
   try {
@@ -26,44 +27,34 @@ export async function GET(request: Request) {
     const db = getDb();
 
     const activeRooms = await db
-      .select({ id: rooms.id, name: rooms.name })
+      .select({ id: rooms.id, name: rooms.name, code: rooms.code })
       .from(rooms)
       .where(eq(rooms.isActive, true))
       .orderBy(asc(rooms.id));
 
-    const rows = await db
-      .select({
-        roomId: bookings.roomId,
-        bookingRef: bookings.bookingRef,
-        startTime: bookings.startTime,
-        endTime: bookings.endTime,
-        guestName: bookings.guestStudentName,
-        userName: users.fullName,
-      })
-      .from(bookings)
-      .leftJoin(users, eq(bookings.userId, users.id))
-      .where(
-        and(
-          eq(bookings.status, "confirmed"),
-          or(
-            and(eq(bookings.date, date), gte(bookings.startTime, "06:00")),
-            and(eq(bookings.date, nextDateStr), lt(bookings.startTime, "06:00"))
-          )
-        )
-      )
-      .orderBy(asc(bookings.startTime));
+    const bookableRooms = activeRooms.filter((room) => BOOKABLE_ROOM_CODES.includes(room.code as typeof BOOKABLE_ROOM_CODES[number]));
+
+    const hasEndDate = Boolean((await db.$client.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>())?.present);
+    const rows = await db.$client.prepare(`
+      SELECT room_id AS roomId, booking_ref AS bookingRef,
+        ${hasEndDate ? "end_date AS endDate," : "NULL AS endDate,"}
+        start_time AS startTime, end_time AS endTime
+      FROM bookings
+      WHERE status = 'confirmed' AND ((date = ? AND start_time >= '06:00') OR (date = ? AND start_time < '06:00'))
+      ORDER BY start_time
+    `).bind(date, nextDateStr).all<{ roomId: number; bookingRef: string; endDate: string | null; startTime: string; endTime: string }>();
 
     const byRoom = new Map<
       number,
-      { bookingRef: string; startTime: string; endTime: string; bookedBy: string }[]
+         { bookingRef: string; endDate: string | null; startTime: string; endTime: string }[]
     >();
-    for (const row of rows) {
+    for (const row of rows.results) {
       const list = byRoom.get(row.roomId) ?? [];
       list.push({
         bookingRef: row.bookingRef,
+        endDate: row.endDate,
         startTime: row.startTime,
         endTime: row.endTime,
-        bookedBy: row.userName ?? row.guestName ?? "Student",
       });
       byRoom.set(row.roomId, list);
     }
@@ -74,7 +65,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       date,
-      rooms: activeRooms.map((room) => ({
+      rooms: bookableRooms.map((room) => ({
         id: room.id,
         name: room.name,
         bookings: (byRoom.get(room.id) ?? []).sort(

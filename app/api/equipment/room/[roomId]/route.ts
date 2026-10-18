@@ -20,7 +20,14 @@ export async function GET(
 
     const db = getDb();
     const [room] = await db
-      .select()
+      .select({
+        id: rooms.id,
+        name: rooms.name,
+        code: rooms.code,
+        capacity: rooms.capacity,
+        description: rooms.description,
+        isActive: rooms.isActive,
+      })
       .from(rooms)
       .where(eq(rooms.id, roomId))
       .limit(1);

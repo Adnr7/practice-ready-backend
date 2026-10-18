@@ -12,7 +12,6 @@ import {
 import { AttachmentEditor, AttachmentGallery } from "./live-attachments";
 import { action, card, field, MutationState, Panel, primary, required, State, timestamp, useLiveData, useMutation } from "./live-common";
 import { BookingDetails } from "./live-journal";
-import { PublishedRules, SupportContacts } from "./live-practice";
 import type { MovementDestination } from "@/lib/movement-permissions";
 
 function phaseLabel(booking: ReservationData) {
@@ -103,7 +102,7 @@ function Support({ user }: { user: UserProfile }) {
 }
 
 export function LiveSupport({ user, onBack }: { user: UserProfile | null; onBack: () => void }) {
-  return <Panel title="Reports & Support" onBack={onBack}>{user ? <Support key={user.id} user={user} /> : <State error="Sign in to submit or view reports." />}<SupportContacts /><PublishedRules /></Panel>;
+  return <Panel title="Reports & Support" onBack={onBack}>{user ? <Support key={user.id} user={user} /> : <State error="Sign in to submit or view reports." />}</Panel>;
 }
 
 function MovementCard({ movement, onChanged }: { movement: MovementData; onChanged: () => void }) {

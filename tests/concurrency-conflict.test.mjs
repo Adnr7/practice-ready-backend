@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   validateBookingRequest,
   generateDailyTimeSlots,
+  DEFAULT_BOOKING_POLICY,
 } from "../lib/booking-engine.ts";
 
 describe("Booking Conflict & Concurrency Simulator", () => {
   // Fixed reference point: 2026-10-05 at 00:00 institution time.
   const NOW = { date: "2026-10-05", minutes: 0 };
+  const LEGACY_POLICY = { ...DEFAULT_BOOKING_POLICY, studentWindow: false };
 
   it("should detect overlapping conflicts between requested and existing booked slots", () => {
     // Generate standard daily slots for room 3 on 2026-10-05
@@ -20,7 +22,7 @@ describe("Booking Conflict & Concurrency Simulator", () => {
         startTime: "10:00",
         endTime: "11:30",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
     assert.equal(bookingA.valid, true);
 
@@ -38,7 +40,7 @@ describe("Booking Conflict & Concurrency Simulator", () => {
         startTime: "10:30",
         endTime: "12:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
     assert.equal(bookingB.valid, true);
 
@@ -59,7 +61,7 @@ describe("Booking Conflict & Concurrency Simulator", () => {
         startTime: "14:00",
         endTime: "15:30",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     for (const slot of slots) {
@@ -75,7 +77,7 @@ describe("Booking Conflict & Concurrency Simulator", () => {
         startTime: "15:30",
         endTime: "17:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
     assert.equal(bookingB.valid, true);
 

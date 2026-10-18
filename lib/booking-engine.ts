@@ -29,6 +29,13 @@ export interface BookingValidationResult {
   error?: string;
   durationMinutes?: number;
   requiredSlots?: string[]; // array of startTime strings
+  requiredSlotRefs?: BookingSlotRef[];
+  endDate?: string;
+}
+
+export interface BookingSlotRef {
+  date: string;
+  startTime: string;
 }
 
 export interface BookingPolicy {
@@ -41,6 +48,8 @@ export interface BookingPolicy {
   openingTime: string;
   closingTime: string;
   cancellationCutoffMinutes: number;
+  /** Whether this policy uses the current Asmi student booking window. */
+  studentWindow?: boolean;
 }
 
 export const DEFAULT_BOOKING_POLICY: BookingPolicy = {
@@ -52,6 +61,7 @@ export const DEFAULT_BOOKING_POLICY: BookingPolicy = {
   openingTime: "00:00",
   closingTime: "00:00",
   cancellationCutoffMinutes: 0,
+  studentWindow: true,
 };
 
 /**
@@ -125,11 +135,15 @@ export function isStartInPast(
 export function isBookingElapsed(
   date: string,
   endTime: string,
-  now: InstitutionNow = getInstitutionNow()
+  now: InstitutionNow = getInstitutionNow(),
+  endDate?: string,
 ): boolean {
+  const effectiveEndDate = endDate ?? date;
+  if (effectiveEndDate < now.date) return true;
+  if (effectiveEndDate > now.date) return false;
   if (date < now.date) return true;
-  if (date > now.date) return false;
-  return normalizeEndMinutes(endTime) <= now.minutes;
+  const endMinutes = endDate && endDate !== date ? timeToMinutes(endTime) : normalizeEndMinutes(endTime);
+  return endMinutes <= now.minutes;
 }
 
 export type BookingPhase =
@@ -149,10 +163,11 @@ export function deriveBookingPhase(
   status: "confirmed" | "cancelled" | "completed",
   now: InstitutionNow = getInstitutionNow(),
   sessionEndedAt?: string | null,
+  endDate?: string | null,
 ): BookingPhase {
   if (status === "cancelled") return "cancelled";
   if (status === "completed" || sessionEndedAt) return "completed";
-  if (isBookingElapsed(date, endTime, now)) return "completed";
+  if (isBookingElapsed(date, endTime, now, endDate ?? undefined)) return "completed";
   if (isStartInPast(date, startTime, now)) return "in_progress";
   return "upcoming";
 }
@@ -176,6 +191,100 @@ export function minutesToTime(minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+export function addCalendarDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function calendarDayDifference(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
+export interface ResolvedBookingWindow {
+  date: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  startMinutes: number;
+  endMinutes: number;
+  endOffsetMinutes: number;
+  durationMinutes: number;
+  requiredSlotRefs: BookingSlotRef[];
+}
+
+/**
+ * Resolves both the existing same-day request shape and an overnight request.
+ * A `23:30` → `00:30` request without endDate is inferred to end tomorrow;
+ * the legacy final `23:30` → `00:00` slot remains the end boundary of date.
+ */
+export function resolveBookingWindow(params: {
+  date: string;
+  startTime: string;
+  endTime: string;
+  endDate?: string;
+}): { valid: true; window: ResolvedBookingWindow } | { valid: false; error: string } {
+  const { date, startTime, endTime } = params;
+  if (!isValidCalendarDate(date)) {
+    return { valid: false, error: "Invalid date. Expected a real calendar date in YYYY-MM-DD format." };
+  }
+  if (params.endDate !== undefined && !isValidCalendarDate(params.endDate)) {
+    return { valid: false, error: "Invalid endDate. Expected a real calendar date in YYYY-MM-DD format." };
+  }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) {
+    return { valid: false, error: "Invalid time format. Expected HH:MM." };
+  }
+
+  const startMinutes = timeToMinutes(startTime);
+  const rawEndMinutes = timeToMinutes(endTime);
+  let endDate = params.endDate;
+  if (!endDate) {
+    const inferredOvernight = rawEndMinutes <= startMinutes && startMinutes >= 18 * 60 && rawEndMinutes < 6 * 60;
+    endDate = endTime === "00:00" || inferredOvernight ? addCalendarDays(date, 1) : date;
+  }
+  if (endDate < date) return { valid: false, error: "endDate cannot be before date." };
+
+  const dayDifference = calendarDayDifference(date, endDate);
+  const endOffsetMinutes = dayDifference * 1440 + rawEndMinutes;
+  const durationMinutes = endOffsetMinutes - startMinutes;
+  if (durationMinutes <= 0) return { valid: false, error: "End time must be after start time." };
+  if (dayDifference > 1 || durationMinutes > 24 * 60) {
+    return { valid: false, error: "Bookings may span at most one overnight boundary." };
+  }
+
+  const requiredSlotRefs: BookingSlotRef[] = [];
+  for (let offset = startMinutes; offset < endOffsetMinutes; offset += 30) {
+    const dayOffset = Math.floor(offset / 1440);
+    requiredSlotRefs.push({ date: addCalendarDays(date, dayOffset), startTime: minutesToTime(offset) });
+  }
+  return {
+    valid: true,
+    window: {
+      date,
+      endDate,
+      startTime,
+      endTime,
+      startMinutes,
+      endMinutes: rawEndMinutes,
+      endOffsetMinutes,
+      durationMinutes,
+      requiredSlotRefs,
+    },
+  };
+}
+
+/** Current Asmi student booking window, evaluated on the IST wall clock. */
+export function isWithinAsmiStudentWindow(window: ResolvedBookingWindow, now: InstitutionNow): boolean {
+  const tomorrow = addCalendarDays(now.date, 1);
+  if (now.minutes < 360) {
+    return window.date === now.date && window.startMinutes >= now.minutes && window.endOffsetMinutes <= 360;
+  }
+  if (window.date === now.date) {
+    return window.startMinutes >= now.minutes && window.endOffsetMinutes <= 1440 + 360;
+  }
+  return window.date === tomorrow && window.startMinutes < 360 && window.endOffsetMinutes <= 360;
+}
+
 /**
  * Determines which time period a given start time falls into.
  */
@@ -197,26 +306,22 @@ export function validateBookingRequest(
     date: string;
     startTime: string;
     endTime: string;
+    endDate?: string;
   },
   now: InstitutionNow = getInstitutionNow(),
   policy: BookingPolicy = DEFAULT_BOOKING_POLICY,
 ): BookingValidationResult {
-  const { date, startTime, endTime } = params;
+  const { date, startTime } = params;
 
   if (!isValidCalendarDate(date)) {
     return { valid: false, error: "Invalid date. Expected a real calendar date in YYYY-MM-DD format." };
   }
 
-  // Validate time formats (HH:MM, 24h)
-  if (
-    !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
-    !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)
-  ) {
-    return { valid: false, error: "Invalid time format. Expected HH:MM." };
-  }
-
-  const startMins = timeToMinutes(startTime);
-  const endMins = normalizeEndMinutes(endTime);
+  const resolved = resolveBookingWindow(params);
+  if (!resolved.valid) return resolved;
+  const { window } = resolved;
+  const startMins = window.startMinutes;
+  const endMins = window.endOffsetMinutes;
 
   const slotMinutes = Number.isSafeInteger(policy.slotMinutes) && policy.slotMinutes > 0 ? policy.slotMinutes : 30;
   const minimumMinutes = Number.isSafeInteger(policy.minimumMinutes) && policy.minimumMinutes > 0 ? policy.minimumMinutes : 30;
@@ -233,15 +338,7 @@ export function validateBookingRequest(
     };
   }
 
-  // End time must be strictly after start time
-  if (endMins <= startMins) {
-    return {
-      valid: false,
-      error: "End time must be after start time.",
-    };
-  }
-
-  const duration = endMins - startMins;
+  const duration = window.durationMinutes;
 
   if (duration > maximumMinutes) {
     return {
@@ -257,33 +354,40 @@ export function validateBookingRequest(
     };
   }
 
-  if (startMins < openingMins || endMins > closingMins) {
+  if (startMins < openingMins || endMins > (window.date === window.endDate ? closingMins : 1440 + closingMins)) {
     return {
       valid: false,
       error: `Requested time is outside bookable hours (${policy.openingTime}-${policy.closingTime}).`,
     };
   }
 
-  // Reject bookings for dates that have already passed
-  if (date < now.date) {
-    return {
-      valid: false,
-      error: "Bookings cannot be made for past dates. Please choose today or a future date.",
-    };
+  if (policy.studentWindow !== false && !isWithinAsmiStudentWindow(window, now)) {
+    if (date < now.date) {
+      return { valid: false, error: "Bookings cannot be made for past dates. Please choose today or tomorrow's 00:00-06:00 window." };
+    }
+    return { valid: false, error: "Asmi student bookings are limited to the remaining time today and tomorrow 00:00-06:00." };
   }
 
-  const requestedDay = Date.parse(`${date}T00:00:00Z`);
-  const currentDay = Date.parse(`${now.date}T00:00:00Z`);
-  const advanceDays = Number.isSafeInteger(policy.advanceDays) && policy.advanceDays >= 0 ? policy.advanceDays : DEFAULT_BOOKING_POLICY.advanceDays;
-  if (requestedDay > currentDay + advanceDays * 86_400_000) {
-    return {
-      valid: false,
-      error: `Bookings can be made at most ${advanceDays} days in advance.`,
-    };
-  }
-
-  // Reject bookings whose start time has already passed today
-  if (isStartInPast(date, startTime, now)) {
+  if (policy.studentWindow === false) {
+    if (date < now.date) {
+      return {
+        valid: false,
+        error: "Bookings cannot be made for past dates. Please choose today or a future date.",
+      };
+    }
+    const requestedDay = Date.parse(`${date}T00:00:00Z`);
+    const currentDay = Date.parse(`${now.date}T00:00:00Z`);
+    const advanceDays = Number.isSafeInteger(policy.advanceDays) && policy.advanceDays >= 0 ? policy.advanceDays : DEFAULT_BOOKING_POLICY.advanceDays;
+    if (requestedDay > currentDay + advanceDays * 86_400_000) {
+      return { valid: false, error: `Bookings can be made at most ${advanceDays} days in advance.` };
+    }
+    if (isStartInPast(date, startTime, now)) {
+      return {
+        valid: false,
+        error: "This time slot has already started or passed. Please choose a later time.",
+      };
+    }
+  } else if (date < now.date || (date === now.date && startMins < now.minutes)) {
     return {
       valid: false,
       error: "This time slot has already started or passed. Please choose a later time.",
@@ -292,14 +396,14 @@ export function validateBookingRequest(
 
   // Compute all continuous 30-minute slot start times
   const requiredSlots: string[] = [];
-  for (let m = startMins; m < endMins; m += 30) {
-    requiredSlots.push(minutesToTime(m));
-  }
+  for (const slot of window.requiredSlotRefs) requiredSlots.push(slot.startTime);
 
   return {
     valid: true,
     durationMinutes: duration,
     requiredSlots,
+    requiredSlotRefs: window.requiredSlotRefs,
+    endDate: window.endDate,
   };
 }
 

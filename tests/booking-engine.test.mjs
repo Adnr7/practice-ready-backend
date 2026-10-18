@@ -10,10 +10,12 @@ import {
   isBookingElapsed,
   deriveBookingPhase,
   isValidCalendarDate,
+  DEFAULT_BOOKING_POLICY,
 } from "../lib/booking-engine.ts";
 
 // Fixed reference point: 2026-10-01 at 00:00 institution time.
 const NOW = { date: "2026-10-01", minutes: 0 };
+const LEGACY_POLICY = { ...DEFAULT_BOOKING_POLICY, studentWindow: false };
 
 describe("Booking Engine & Conflict Prevention", () => {
   it("should reject impossible calendar dates", () => {
@@ -29,7 +31,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "09:00",
         endTime: "11:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, true);
@@ -45,7 +47,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "09:00",
         endTime: "12:30",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, false);
@@ -60,7 +62,8 @@ describe("Booking Engine & Conflict Prevention", () => {
       maximumMinutes: 120,
       advanceDays: 2,
       openingTime: "09:00",
-      closingTime: "18:00",
+    closingTime: "18:00",
+    studentWindow: false,
     };
     assert.equal(validateBookingRequest({ date: "2026-10-03", startTime: "09:00", endTime: "10:00" }, NOW, policy).valid, true);
     assert.equal(validateBookingRequest({ date: "2026-10-04", startTime: "09:00", endTime: "10:00" }, NOW, policy).valid, false);
@@ -74,7 +77,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "09:15",
         endTime: "10:15",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, false);
@@ -88,7 +91,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "11:00",
         endTime: "10:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, false);
@@ -102,7 +105,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "07:30",
         endTime: "08:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, false);
@@ -117,7 +120,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "07:30",
         endTime: "08:00",
       },
-      evening
+      evening, LEGACY_POLICY
     );
 
     assert.equal(res.valid, false);
@@ -132,7 +135,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "19:00",
         endTime: "19:30",
       },
-      now
+      now, LEGACY_POLICY
     );
 
     assert.equal(res.valid, true);
@@ -146,7 +149,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "23:30",
         endTime: "00:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, true);
@@ -161,7 +164,7 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "00:30",
         endTime: "02:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, true);
@@ -176,25 +179,30 @@ describe("Booking Engine & Conflict Prevention", () => {
         startTime: "05:00",
         endTime: "06:00",
       },
-      NOW
+      NOW, LEGACY_POLICY
     );
 
     assert.equal(res.valid, true);
     assert.deepEqual(res.requiredSlots, ["05:00", "05:30"]);
   });
 
-  it("should reject requests that wrap past midnight into the next day", () => {
+  it("should accept an inferred overnight request across midnight", () => {
+    const now = { date: "2026-10-01", minutes: 18 * 60 };
     const res = validateBookingRequest(
       {
         date: "2026-10-01",
         startTime: "23:30",
         endTime: "00:30",
       },
-      NOW
+      now
     );
 
-    assert.equal(res.valid, false);
-    assert.ok(res.error?.includes("after start time"));
+    assert.equal(res.valid, true);
+    assert.equal(res.endDate, "2026-10-02");
+    assert.deepEqual(res.requiredSlotRefs, [
+      { date: "2026-10-01", startTime: "23:30" },
+      { date: "2026-10-02", startTime: "00:00" },
+    ]);
   });
 
   it("should map times to correct True School of Music periods", () => {

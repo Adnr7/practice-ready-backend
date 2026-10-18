@@ -9,6 +9,8 @@ import {
   ChevronDown,
   Clock3,
   Expand,
+  Eye,
+  EyeOff,
   Headphones,
   MapPin,
   Moon,
@@ -18,7 +20,6 @@ import {
   ShieldCheck,
   TriangleAlert,
   User,
-  Users,
   Volume2,
   VolumeX,
   X,
@@ -31,6 +32,7 @@ import {
   fetchBookingStatus,
   fetchCurrentUser,
   fetchEquipmentInventory,
+  fetchRooms,
   fetchRoomEquipment,
   fetchSchedule,
   login,
@@ -38,15 +40,17 @@ import {
   register,
   resolveRoomId,
   submitBooking,
+  updateCurrentUser,
   type EquipmentItem,
+  type RoomData,
   type ScheduleResponse,
   type UserProfile,
 } from "@/lib/api-client";
-import { isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
+import { addCalendarDays, getInstitutionNow, isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
-import { LiveMovements, LiveReservations, LiveSupport } from "@/components/live-workflows";
-import { LivePractice } from "@/components/live-practice";
-import { LiveStaff } from "@/components/live-staff";
+import { LiveReservations, LiveSupport } from "@/components/live-workflows";
+import { AsmiAccountMenu, AsmiLoginPage } from "@/components/asmi-account";
+import RoomAvailabilityCalendar from "@/components/room-availability-calendar";
 
 
 const PRACTICE_READY_MUSIC_SRC = "/practice-ready-smooth-jazz.mp3";
@@ -307,12 +311,11 @@ type Screen =
   | "home"
   | "reservations"
   | "support"
-  | "movements"
-  | "practice"
-  | "staff"
   | "date"
   | "mpr"
   | "period"
+  | "slots"
+  | "setup"
   | "slots2"
   | "slots3"
   | "slots4"
@@ -335,6 +338,7 @@ type Screen =
   | "directory-search"
   | "directory-browse"
   | "schedule"
+  | "availability"
   | "directory-results";
 
 type Equipment = {
@@ -1831,14 +1835,22 @@ const liveListEquipmentSearchRank = (item: Equipment, value: string) => {
   return 99;
 };
 
-// The institution runs on a 24-hour clock. Each slot is identified by its
-// start time in "HH:MM" form, which doubles as the value sent to the API.
-const slotKey = (absoluteMinutes: number) => minutesToTime(absoluteMinutes);
+const clockLabel = (absoluteMinutes: number) => {
+  const minutesInDay = ((absoluteMinutes % 1440) + 1440) % 1440;
+  const hour24 = Math.floor(minutesInDay / 60);
+  const minute = minutesInDay % 60;
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
+};
 
-const slotLabel = (startTime: string) =>
-  /^\d{2}:\d{2}$/.test(startTime)
-    ? `${startTime}–${minutesToTime(timeToMinutes(startTime) + 30)}`
-    : startTime;
+const slotKey = (absoluteMinutes: number) => minutesToTime(absoluteMinutes);
+const slotBaseTime = (slot: string) => slot.replace(/\s*·\s*next day$/i, "");
+const slotLabel = (startTime: string) => {
+  const base = slotBaseTime(startTime);
+  if (!/^\d{2}:\d{2}$/.test(base)) return startTime;
+  return `${clockLabel(timeToMinutes(base))}–${clockLabel(timeToMinutes(base) + 30)}${startTime.endsWith(" · next day") ? " · next day" : ""}`;
+};
 
 const slotsBetween = (startMinutes: number, endMinutes: number) =>
   Array.from(
@@ -1847,19 +1859,22 @@ const slotsBetween = (startMinutes: number, endMinutes: number) =>
   );
 
 const periods = [
+  { name: "Late Night", times: slotsBetween(0, 360) },
   { name: "Early Morning", times: slotsBetween(360, 540) },
   { name: "Morning", times: slotsBetween(540, 720) },
   { name: "Afternoon", times: slotsBetween(720, 1020) },
   { name: "Evening", times: slotsBetween(1020, 1200) },
   { name: "Night", times: slotsBetween(1200, 1440) },
-  { name: "Late Night · 28 Aug", times: slotsBetween(1440, 1800) },
+  { name: "Next day · Late Night", times: slotsBetween(1440, 1800).map((time) => `${time} · next day`) },
 ];
 
 const allTimeSlots = periods.flatMap((period) => period.times);
 const timeRangeLabel = (slots: string[]) => {
   if (slots.length === 0) return "";
-  if (slots.length === 1) return slotLabel(slots[0]);
-  return `${slots[0]}–${minutesToTime(timeToMinutes(slots[slots.length - 1]) + 30)}`;
+  const firstIndex = allTimeSlots.indexOf(slots[0]);
+  const lastIndex = allTimeSlots.indexOf(slots[slots.length - 1]);
+  if (firstIndex < 0 || lastIndex < 0) return "";
+  return `${clockLabel(firstIndex * 30)}–${clockLabel((lastIndex + 1) * 30)}${lastIndex >= 48 ? " · next day" : ""}`;
 };
 
 const durationLabel = (slotCount: number) => {
@@ -1878,8 +1893,7 @@ const bookingDateForSlots = (baseDate: Date, slots: string[]) => {
   const firstIndex = allTimeSlots.indexOf(slots[0]);
   // The operational day runs 06:00–06:00. Slots from midnight onward
   // belong to the following calendar date even though they remain on this screen.
-  const midnightIndex = periods.slice(0, 5).flatMap((period) => period.times).length;
-  if (firstIndex >= midnightIndex) bookingDate.setDate(bookingDate.getDate() + 1);
+  if (firstIndex >= 48) bookingDate.setDate(bookingDate.getDate() + 1);
   return bookingDate;
 };
 
@@ -1888,6 +1902,11 @@ const bookingDateForSlots = (baseDate: Date, slots: string[]) => {
 // timezones ahead of UTC (e.g. IST, the institution's timezone).
 const dateKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+const bookingWindowMessage = (now = getInstitutionNow()) =>
+  now.minutes < 360
+    ? "Only today’s midnight–6:00 AM slots are open. Daytime bookings open at 6:00 AM."
+    : "Booking is open until 6:00 AM tomorrow.";
 
 const ACTIVE_RESERVATION_STORAGE_KEY = "practice-ready-active-reservation";
 
@@ -2750,17 +2769,17 @@ function EquipmentDataNotice({ status }: { status: EquipmentLoadStatus }) {
   return null;
 }
 
-function BookingAccountPanel({
-  user,
-  onUserChange,
-}: {
-  user: UserProfile | null;
-  onUserChange: (user: UserProfile | null) => void;
-}) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+function BookingLoginPage({ onUserChange }: { onUserChange: (user: UserProfile) => void }) {
+  return <AsmiLoginPage onUserChange={onUserChange} controls={<><MusicToggle inline /><ThemeToggle inline /></>} />;
+
+  /* Legacy API-backed form retained below as a reference while the Asmi
+     presentation is active. */
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "sent">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -2768,124 +2787,43 @@ function BookingAccountPanel({
     event.preventDefault();
     setPending(true);
     setError("");
-    const result =
-      mode === "login"
-        ? await login({ email, password })
-        : await register({ email, password, fullName });
-    setPending(false);
+    const result = mode === "login"
+      ? await login({ email, password })
+      : await register({ email, password, fullName });
     if (!result.success || !result.user) {
-      setError(result.error ?? "Could not authenticate.");
+      setError(result.error ?? "Email or password is incorrect.");
+      setPending(false);
       return;
     }
-    onUserChange(result.user);
+    if (mode === "register" && phone.trim()) {
+      const updated = await updateCurrentUser({ fullName: result.user.fullName, phone: phone.trim() });
+      onUserChange(updated.success && updated.user ? updated.user : result.user);
+    } else {
+      onUserChange(result.user);
+    }
     setPassword("");
-  };
-
-  const signOut = async () => {
-    setPending(true);
-    setError("");
-    const result = await logout();
     setPending(false);
-    if (!result.success) {
-      setError(result.error ?? "Could not sign out.");
-      return;
-    }
-    onUserChange(null);
   };
-
-  if (user) {
-    return (
-      <div className="mt-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3.5 dark:border-emerald-700 dark:bg-[#10271F] sm:mt-5 sm:p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
-              Signed in
-            </p>
-            <p className="mt-1 truncate font-semibold text-emerald-950 dark:text-emerald-100">
-              {user.fullName}
-            </p>
-            <p className="mt-0.5 truncate text-xs text-emerald-800 dark:text-emerald-200">
-              {user.email}
-            </p>
-            <p className="mt-2 text-xs leading-5 text-emerald-800 dark:text-emerald-200">
-              This reservation will be linked to your account.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void signOut()}
-            disabled={pending}
-            className="shrink-0 rounded-xl border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-600 dark:bg-[#153327] dark:text-emerald-200 dark:hover:bg-[#1A4030]"
-          >
-            Sign out
-          </Button>
-        </div>
-        {error && <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>}
-      </div>
-    );
-  }
 
   return (
-    <details className="mt-3.5 rounded-2xl border border-slate-200 bg-white dark:border-[#30384D] dark:bg-[#1B2133] sm:mt-5">
-      <summary className="cursor-pointer px-3.5 py-3 text-sm font-semibold text-violet-700 dark:text-violet-200">
-        Sign in or create a student account
-      </summary>
-      <div className="border-t border-slate-100 px-3.5 pb-3.5 pt-3 dark:border-[#252C3E] sm:px-4 sm:pb-4">
-        <div className="mb-3 flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-[#202739]">
-          {(["login", "register"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => {
-                setMode(value);
-                setError("");
-              }}
-              className={`min-h-9 flex-1 rounded-lg px-3 text-xs font-semibold capitalize ${mode === value ? "bg-white text-violet-700 shadow-sm dark:bg-[#30384D] dark:text-violet-200" : "text-slate-500 dark:text-[#9AA6BC]"}`}
-            >
-              {value}
-            </button>
-          ))}
-        </div>
-        <form className="space-y-2.5" onSubmit={submit}>
-          {mode === "register" && (
-            <Input
-              value={fullName}
-              onChange={(event) => setFullName(event.target.value)}
-              placeholder="Full name"
-              aria-label="Full name"
-              autoComplete="name"
-              required
-            />
-          )}
-          <Input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="University email"
-            aria-label="University email"
-            autoComplete="email"
-            required
-          />
-          <Input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Password"
-            aria-label="Password"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            required
-          />
-          <Button type="submit" disabled={pending} className="min-h-10 w-full rounded-xl bg-violet-600 text-sm font-semibold text-white hover:bg-violet-700">
-            {pending ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
-          </Button>
-        </form>
-        {error && <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>}
-        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-[#9AA6BC]">
-          Sign in before confirming an operational reservation. Demo-only presentation is available with <code>?demo=1</code>.
-        </p>
+    <main className="relative isolate min-h-[100dvh] overflow-x-clip bg-[#f3efff] text-[#151a31] dark:bg-[#171D2D] dark:text-white">
+      <div className="relative z-10 mx-auto grid min-h-[100dvh] max-w-6xl lg:grid-cols-[.9fr_1.1fr]">
+        <section className="relative hidden overflow-hidden bg-[#111733] p-14 text-white lg:grid lg:grid-rows-[auto_1fr_auto]">
+          <div className="absolute -left-24 top-24 h-72 w-72 rounded-full bg-violet-600/25 blur-3xl" />
+          <div className="relative flex items-center gap-3 text-sm font-semibold tracking-wide"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-violet-500"><Music2 size={20} /></span>TRUE SCHOOL OF MUSIC</div>
+          <div className="relative self-center py-6"><p className="mb-5 text-sm font-bold uppercase tracking-[.22em] text-orange-300">Practice Ready</p><h1 className="text-5xl font-semibold leading-[1.06] tracking-[-.04em]">Your next practice<br />starts here.</h1><p className="mt-6 max-w-md text-lg leading-8 text-slate-300">Find an open room and check its equipment before your session begins.</p></div>
+          <div className="relative flex h-24 items-end gap-2">{[28, 46, 64, 38, 74, 52, 34, 68, 44, 58, 30, 50].map((height, index) => <span key={index} className="w-3 rounded-full bg-gradient-to-t from-violet-500 to-orange-300" style={{ height }} />)}</div>
+        </section>
+        <section className="flex min-h-[100dvh] items-center px-6 py-8 sm:px-12 lg:px-16">
+          <div className="mx-auto w-full max-w-md">
+            <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">Practice Ready</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{mode === "register" ? "Create account" : mode === "forgot" ? "Forgot your password?" : mode === "sent" ? "Reset request received" : "Welcome back"}</h2>
+            <p className="mb-5 mt-3 leading-6 text-slate-600 dark:text-slate-300">{mode === "register" ? "Get ready for your next practice at TSM." : mode === "login" ? "Log in to get ready for your next practice." : "This is a demo. No reset email has been sent and your password is unchanged."}</p>
+            {mode === "sent" ? <button type="button" onClick={() => setMode("login")} className="min-h-12 w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700">Back to login</button> : mode === "forgot" ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setMode("sent"); }}><label className="block text-sm font-semibold">Email<input className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="min-h-12 w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700">Request password reset</button><button type="button" onClick={() => setMode("login")} className="min-h-11 text-sm font-medium text-violet-700 dark:text-violet-300">Back to login</button></form> : <form className="space-y-4" onSubmit={submit}>{mode === "register" && <><label className="block text-sm font-semibold">Full name<input className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white" required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label><label className="block text-sm font-semibold">Phone number<input className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} /></label></>}<label className="block text-sm font-semibold">Email<input className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white" type="email" required autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label className="block text-sm font-semibold">Password<div className="relative"><input className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 pr-12 text-base text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white" type={showPassword ? "text" : "password"} required minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} /><button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)} className="absolute bottom-0 right-0 grid h-12 w-12 place-items-center text-slate-500">{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div></label>{error && <p role="alert" className="text-sm text-red-600 dark:text-red-300">{error}</p>}<button disabled={pending} className="min-h-12 w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700 disabled:opacity-60">{pending ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}</button>{mode === "login" && <button type="button" onClick={() => setMode("forgot")} className="min-h-10 text-left text-sm font-medium text-violet-700 hover:underline dark:text-violet-300">Forgot password?</button>}<p className="text-sm text-slate-600 dark:text-slate-300">{mode === "login" ? "Don’t have an account?" : "Already have an account?"} <button type="button" className="font-semibold text-violet-700 hover:underline dark:text-violet-300" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "Create account" : "Log in"}</button></p></form>}
+          </div>
+        </section>
       </div>
-    </details>
+    </main>
   );
 }
 
@@ -2901,6 +2839,8 @@ export default function Home() {
     getDemoPresentationServerSnapshot,
   );
   const [liveDirectoryEquipment, setLiveDirectoryEquipment] = useState<Equipment[] | null>(null);
+  const [bookableRooms, setBookableRooms] = useState<RoomData[]>([]);
+  const [roomsStatus, setRoomsStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [directoryEquipmentStatus, setDirectoryEquipmentStatus] = useState<EquipmentLoadStatus>("idle");
   const [liveRoomEquipment, setLiveRoomEquipment] = useState<Record<string, RoomEquipmentViewState>>({});
   const [liveSlotResult, setLiveSlotResult] = useState<{
@@ -2965,6 +2905,21 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
+    fetchRooms().then((rooms) => {
+      if (cancelled) return;
+      if (!rooms) {
+        setRoomsStatus("error");
+        return;
+      }
+      setBookableRooms(rooms);
+      setRoomsStatus("loaded");
+      setRoom((current) => rooms.some((item) => item.name === current) ? current : rooms[0]?.name ?? "");
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     fetchCurrentUser().then((user) => {
       if (cancelled) return;
       setCurrentUser(user);
@@ -3008,6 +2963,7 @@ export default function Home() {
 
   useEffect(() => {
     const roomScreen = [
+      "setup",
       "setup2",
       "setup3",
       "setup4",
@@ -3241,7 +3197,7 @@ export default function Home() {
   }, [screen]);
 
   useEffect(() => {
-    if (!["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
+    if (!["slots", "slots2", "slots3", "slots4", "slots5"].includes(screen)) {
       return;
     }
     let cancelled = false;
@@ -3267,13 +3223,11 @@ export default function Home() {
         }
         const info: Record<string, { booked: boolean; bookedBy?: string | null }> = {};
         for (const slot of today?.slots ?? []) {
-          if (slot.startTime >= "06:00") {
-             info[slot.startTime] = { booked: slot.status !== "available", bookedBy: slot.bookedBy ?? null };
-          }
+          info[slot.startTime] = { booked: slot.status !== "available", bookedBy: null };
         }
         for (const slot of tomorrow?.slots ?? []) {
           if (slot.startTime < "06:00") {
-             info[slot.startTime] = { booked: slot.status !== "available", bookedBy: slot.bookedBy ?? null };
+             info[`${slot.startTime} · next day`] = { booked: slot.status !== "available", bookedBy: null };
           }
         }
 
@@ -3338,12 +3292,18 @@ export default function Home() {
 
     setBookingError("");
 
-    // Late-night slots (00:00–06:00) belong to the next calendar date, so the
-    // submitted date must come from bookingDateForSlots, not the raw selection.
-    const dateStr = dateKey(bookingDateForSlots(selectedDate || new Date(), selectedSlots));
-    const startTime = selectedSlots[0] || "09:00";
+    const baseDate = selectedDate || new Date();
+    const firstIndex = selectedSlots.length ? allTimeSlots.indexOf(selectedSlots[0]) : 0;
+    const lastIndex = selectedSlots.length ? allTimeSlots.indexOf(selectedSlots[selectedSlots.length - 1]) : firstIndex;
+    const startDate = new Date(baseDate);
+    if (firstIndex >= 48) startDate.setDate(startDate.getDate() + 1);
+    const endDateValue = new Date(baseDate);
+    if (lastIndex >= 48 || lastIndex === 47) endDateValue.setDate(endDateValue.getDate() + 1);
+    const dateStr = dateKey(startDate);
+    const endDateStr = dateKey(endDateValue);
+    const startTime = slotBaseTime(selectedSlots[0] || "09:00");
     const endTime = selectedSlots.length > 0
-      ? minutesToTime(timeToMinutes(selectedSlots[selectedSlots.length - 1]) + 30)
+      ? minutesToTime(((lastIndex % 48) + 1) * 30)
       : minutesToTime(timeToMinutes(startTime) + 30);
 
     let bookingUser: UserProfile | null = currentUser;
@@ -3354,19 +3314,18 @@ export default function Home() {
           setCurrentUser(bookingUser);
           setStudentName(bookingUser.fullName);
         }
-        const fingerprint = JSON.stringify([bookingUser?.id, roomId, dateStr, startTime, endTime]);
+        const fingerprint = JSON.stringify([bookingUser?.id, roomId, dateStr, endDateStr, startTime, endTime]);
         if (bookingAttempt.current?.fingerprint !== fingerprint) {
           bookingAttempt.current = { fingerprint, key: `booking-${crypto.randomUUID()}` };
         }
+        if (!bookingUser) throw new Error("Sign in before confirming an operational reservation.");
         return submitBooking({
-          roomId,
-          date: dateStr,
-          startTime,
-          endTime,
-          ...(bookingUser
-            ? {}
-            : { guestName: studentName.trim() || "Student Practice User" }),
-        }, bookingAttempt.current.key);
+           roomId,
+           date: dateStr,
+           ...(endDateStr !== dateStr ? { endDate: endDateStr } : {}),
+           startTime,
+           endTime,
+         }, bookingAttempt.current.key);
       })
       .then((res) => {
         if (!res.success && res.conflictingSlots && res.conflictingSlots.length > 0) {
@@ -3690,6 +3649,9 @@ export default function Home() {
     return { all: matches, available, unavailable };
   }, [directoryEquipmentForView, query]);
 
+  if (!currentUser && !demoPresentation) {
+    return <BookingLoginPage onUserChange={(user) => { setCurrentUser(user); setStudentName(user.fullName); }} />;
+  }
   if (screen === "home")
     return (
       <HomeScreen
@@ -3703,13 +3665,16 @@ export default function Home() {
           setSearched(false);
           go("directory-search");
         }}
-        onSchedule={() => go("schedule")}
+        onAvailability={() => go("availability")}
         onReservations={() => go("reservations")}
         onSupport={() => go("support")}
-        onMovements={() => go("movements")}
-        onPractice={() => go("practice")}
-        onStaff={() => go("staff")}
-        greeting={greeting}
+         onLogout={async () => {
+           const result = await logout();
+           if (result.success) setCurrentUser(null);
+         }}
+         user={currentUser}
+         onUserChange={setCurrentUser}
+         greeting={greeting}
         activeReservation={visibleActiveReservation}
         reservationPhase={reservationPhase}
         reservationNowMs={reservationNowMs}
@@ -3717,22 +3682,32 @@ export default function Home() {
     );
   if (screen === "reservations") return <LiveReservations user={currentUser} onBack={back} />;
   if (screen === "support") return <LiveSupport user={currentUser} onBack={back} />;
-  if (screen === "movements") return <LiveMovements user={currentUser} onBack={back} />;
-  if (screen === "practice") return <LivePractice onBack={back} />;
-  if (screen === "staff") return <LiveStaff user={currentUser} onUserChange={setCurrentUser} onBack={back} onMovements={() => go("movements")} />;
-  if (screen === "schedule")
+  if (screen === "availability")
     return (
-      <ScheduleScreen back={back} />
+      <ScheduleScreen
+        back={back}
+        onSelect={(selectedRoom, date, index) => {
+          const slot = allTimeSlots[index];
+          if (!slot) return;
+          setSelectedDate(date);
+          setRoom(selectedRoom);
+          setMprSelected(selectedRoom);
+          setSelectedSlots([slot]);
+          setSelectedPeriod(periods.findIndex((period) => period.times.includes(slot)));
+          setTime(slot);
+          go("slots");
+        }}
+      />
     );
   if (screen === "date") {
-    const today = new Date();
+    const institutionNow = getInstitutionNow();
+    const today = new Date(`${institutionNow.date}T00:00:00`);
     today.setHours(0, 0, 0, 0);
 
-    // Booking eligibility and calendar browsing are intentionally separate:
-    // users may inspect nearby months, but only today through seven days ahead
-    // can ever be selected.
-    const latestBookableDate = new Date(today);
-    latestBookableDate.setDate(today.getDate() + 7);
+    // Asmi releases daytime bookings at 06:00. Before then only the
+    // remaining midnight–06:00 tail of today is selectable; after then the
+    // only additional selectable date is tomorrow's midnight–06:00 tail.
+    const latestBookableDate = new Date(`${addCalendarDays(institutionNow.date, institutionNow.minutes < 360 ? 0 : 1)}T00:00:00`);
 
     const earliestBrowseMonth = new Date(
       today.getFullYear(),
@@ -3864,12 +3839,12 @@ export default function Home() {
           </div>
 
           <p className="mt-4 text-center text-xs font-medium text-slate-500 dark:text-[#9AA6BC]">
-            Bookings open on a rolling seven-day window.
+            {bookingWindowMessage(institutionNow)}
           </p>
         </div>
 
         <ActionBar>
-          <Primary disabled={!selectedDate} onClick={() => go("mpr")}>
+            <Primary disabled={!selectedDate || dateKey(selectedDate) > dateKey(latestBookableDate)} onClick={() => go("mpr")}>
             Choose an MPR <ArrowRight />
           </Primary>
         </ActionBar>
@@ -3886,20 +3861,25 @@ export default function Home() {
         compactMobileHeader
         compactActionBarPadding
       >
+        {roomsStatus === "loading" && <p role="status" className="rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-800 dark:border-violet-500/30 dark:bg-[#211A38] dark:text-violet-200">Loading available rooms…</p>}
+        {roomsStatus === "error" && <p role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-800 dark:bg-[#321820] dark:text-rose-200">Could not load the available rooms. Please retry.</p>}
         <div className="grid gap-2 sm:grid-cols-2 sm:gap-3">
-          {["MPR 2", "MPR 3", "MPR 4", "MPR 5"].map((r) => (
+          {bookableRooms.map((roomOption) => {
+            const r = roomOption.name;
+            return (
             <button
               key={r}
               onClick={() => setMprSelected(r)}
               className={`flex min-h-14 w-full items-center justify-center rounded-2xl border p-3 text-center font-semibold transition-all duration-150 sm:min-h-16 sm:p-4 ${mprSelected === r ? "border-violet-500 bg-violet-50 dark:bg-[#211A38] text-violet-800 dark:text-violet-100 shadow-sm hover:-translate-y-0.5 hover:shadow-md" : "border-slate-200 bg-white dark:border-violet-500/40 dark:bg-[#1B2133] dark:text-[#F5F7FF] hover:-translate-y-0.5 hover:border-violet-300 hover:bg-violet-50/70 hover:shadow-md dark:hover:border-violet-500/70 dark:hover:bg-[#211A38]"}`}
             >
-              <span>{r}</span>
+              <span>{roomOption.name}</span>
             </button>
-          ))}
+            );
+          })}
         </div>
         <ActionBar>
           <Primary
-            disabled={!mprSelected}
+            disabled={!mprSelected || roomsStatus !== "loaded"}
             onClick={() => {
               const returnDirectlyToTimeSlots = returnToTimeSlotsAfterMprChange;
               const roomChanged = mprSelected !== room;
@@ -3927,7 +3907,7 @@ export default function Home() {
               setReturnToTimeSlotsAfterMprChange(false);
               go(
                 returnDirectlyToTimeSlots
-                  ? (`slots${mprSelected.slice(-1)}` as Screen)
+                  ? "slots"
                   : "period",
               );
             }}
@@ -3940,12 +3920,13 @@ export default function Home() {
 
   if (screen === "period") {
     const periodOptions = [
-      { label: "Early Morning", range: "06:00–09:00" },
-      { label: "Morning", range: "09:00–12:00" },
-      { label: "Afternoon", range: "12:00–17:00" },
-      { label: "Evening", range: "17:00–20:00" },
-      { label: "Night", range: "20:00–00:00" },
-      { label: "Late Night", range: "00:00–06:00 · next day" },
+      { label: "Late Night", range: "12:00 AM–6:00 AM" },
+      { label: "Early Morning", range: "6:00 AM–9:00 AM" },
+      { label: "Morning", range: "9:00 AM–12:00 PM" },
+      { label: "Afternoon", range: "12:00 PM–5:00 PM" },
+      { label: "Evening", range: "5:00 PM–8:00 PM" },
+      { label: "Night", range: "8:00 PM–12:00 AM" },
+      { label: "Next day · Late Night", range: "12:00 AM–6:00 AM" },
     ];
 
     return (
@@ -4012,7 +3993,7 @@ export default function Home() {
         <ActionBar>
           <Primary
             disabled={selectedPeriod === null}
-            onClick={() => go(`slots${room.slice(-1)}` as Screen)}
+            onClick={() => go("slots")}
           >
             Choose Your Time Slots <ArrowRight />
           </Primary>
@@ -4028,7 +4009,7 @@ export default function Home() {
   const roomEquipmentData = roomEquipmentForView.items;
 
   if (
-    ["setup2", "setup3", "setup4", "setup5", "issues3", "issues5", "available-equipment"].includes(screen) &&
+    ["setup", "setup2", "setup3", "setup4", "setup5", "issues3", "issues5", "available-equipment"].includes(screen) &&
     !demoPresentation &&
     roomEquipmentForView.status !== "loaded"
   ) {
@@ -4044,7 +4025,7 @@ export default function Home() {
     );
   }
 
-  if (["slots2", "slots3", "slots4", "slots5"].includes(screen)) {
+  if (["slots", "slots2", "slots3", "slots4", "slots5"].includes(screen)) {
     if (!demoPresentation && liveSlots === null) {
       const failed = liveSlotResult?.key === liveSlotKey;
       return <Shell title={`${room} availability`} subtitle="Live availability is required before choosing a time." back={back} home={home}>
@@ -4068,12 +4049,6 @@ export default function Home() {
     if (conflictSlot) {
       booked.add(conflictSlot);
     }
-    const bookedByNames: Record<string, string> = {};
-    if (liveSlots) {
-      for (const [startTime, info] of Object.entries(liveSlots)) {
-        if (info.booked && info.bookedBy) bookedByNames[startTime] = info.bookedBy;
-      }
-    }
     return (
       <Slots
         key={`${room}:${dateKey(selectedDate || new Date())}:${selectedPeriod ?? 0}`}
@@ -4086,14 +4061,13 @@ export default function Home() {
           setTime(timeRangeLabel(slots));
         }}
         booked={booked}
-        bookedBy={bookedByNames}
         back={back}
         onChangeMpr={changeMprFromTimeSlots}
-        onContinue={() => go(`setup${room.slice(-1)}` as Screen)}
+        onContinue={() => go("setup")}
       />
     );
   }
-  if (["setup2", "setup3", "setup4", "setup5"].includes(screen)) {
+  if (["setup", "setup2", "setup3", "setup4", "setup5"].includes(screen)) {
     const data = roomEquipmentData;
     const ready = data.filter((x) => x.status === "ready");
     const issueOrder: Record<Equipment["status"], number> = {
@@ -4474,7 +4448,7 @@ export default function Home() {
       service: 4,
     };
     const isBookableMprLocation = (location: string) =>
-      /^MPR [2345]$/.test(location);
+      bookableRooms.some((roomOption) => roomOption.name === location);
     const isRoomDefiningAlternative = (item: Equipment) =>
       [
         "keyboard-piano",
@@ -4641,7 +4615,7 @@ export default function Home() {
                             onClick={() => {
                               const targetRoom = item.currentLocation;
                               setRoom(targetRoom);
-                              go(`slots${targetRoom.slice(-1)}` as Screen);
+                              go("slots");
                             }}
                             variant="ghost"
                             className="h-auto min-h-11 w-auto justify-start gap-1.5 rounded-xl border border-violet-200 dark:border-violet-500/70 !bg-violet-50/70 dark:!bg-[#211A38] px-3.5 text-sm font-semibold !text-violet-700 dark:!text-violet-200 shadow-none transition-colors hover:!border-violet-300 dark:hover:!border-violet-400 hover:!bg-violet-100 dark:hover:!bg-[#2B2145] hover:!text-violet-800 dark:hover:!text-violet-100 active:!bg-violet-200 dark:active:!bg-[#332653] focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
@@ -4701,33 +4675,7 @@ export default function Home() {
           room={room}
           time={time}
           date={bookingDate}
-          bookedFor={(currentUser?.fullName ?? studentName.trim()) || undefined}
-        />
-        <div className="mt-3.5 sm:mt-5">
-          <label htmlFor="student-name" className="mb-1.5 block text-sm font-semibold">
-            {currentUser ? "Account name" : "Your name"}
-          </label>
-          <Input
-            id="student-name"
-            type="text"
-            value={currentUser?.fullName ?? studentName}
-            onChange={(event) => setStudentName(event.target.value)}
-            placeholder="Student Practice User"
-            maxLength={80}
-            disabled={Boolean(currentUser)}
-          />
-          <p className="mt-1.5 text-xs text-slate-500 dark:text-[#9AA6BC]">
-            {currentUser
-              ? "Your signed-in name will be shown on the time slots."
-              : "Shown on the time slots so others can see who is in the room."}
-          </p>
-        </div>
-        <BookingAccountPanel
-          user={currentUser}
-          onUserChange={(user) => {
-            setCurrentUser(user);
-            setStudentName(user?.fullName ?? "");
-          }}
+          bookedFor={currentUser?.fullName}
         />
         <div
           className={`mt-3.5 rounded-2xl border p-3.5 sm:mt-5 sm:p-4 ${
@@ -4891,7 +4839,7 @@ export default function Home() {
               );
               setSelectedSlots(remainingSlots);
               setTime(timeRangeLabel(remainingSlots));
-              go(`slots${room.slice(-1)}` as Screen);
+               go("slots");
             }}
           >
             Adjust Time Selection in {room}
@@ -5414,12 +5362,12 @@ function ActiveReservationCard({
 function HomeScreen({
   onBook,
   onEquipment,
-  onSchedule,
+  onAvailability,
   onReservations,
   onSupport,
-  onMovements,
-  onPractice,
-  onStaff,
+  onLogout,
+  user,
+  onUserChange,
   greeting,
   activeReservation,
   reservationPhase,
@@ -5427,12 +5375,12 @@ function HomeScreen({
 }: {
   onBook: () => void;
   onEquipment: () => void;
-  onSchedule: () => void;
+  onAvailability: () => void;
   onReservations: () => void;
   onSupport: () => void;
-  onMovements: () => void;
-  onPractice: () => void;
-  onStaff: () => void;
+  onLogout: () => void;
+  user: UserProfile | null;
+  onUserChange: (user: UserProfile) => void;
   greeting: string;
   activeReservation: ActiveReservation | null;
   reservationPhase: BookingPhase;
@@ -5564,6 +5512,7 @@ function HomeScreen({
       <div className="hidden lg:block">
         <ThemeToggle />
         <MusicToggle />
+        {user && <div className="fixed right-5 top-5 z-40 sm:right-[5.25rem] sm:top-8"><AsmiAccountMenu user={user} onUserChange={onUserChange} onLogout={onLogout} /></div>}
       </div>
       <div className="relative z-10 mx-auto grid h-full min-h-0 w-full min-w-0 max-w-6xl lg:min-h-screen lg:grid-cols-[0.9fr_1.1fr]">
         <section className="relative hidden overflow-hidden bg-[#111733] dark:bg-[#0B0F1B] p-14 lg:flex lg:flex-col lg:justify-between">
@@ -5613,9 +5562,7 @@ function HomeScreen({
                 <ThemeToggle inline />
               </div>
             </div>
-            <p className="mb-2 text-sm font-semibold text-violet-700 dark:text-violet-300">
-              {greeting}
-            </p>
+            <div className="mb-2 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{greeting}</p><div className="lg:hidden">{user && <AsmiAccountMenu user={user} onUserChange={onUserChange} onLogout={onLogout} />}</div></div>
             <h2 className="text-[2rem] font-semibold leading-tight tracking-[-.035em] sm:text-4xl">
               What do you need for practice?
             </h2>
@@ -5634,50 +5581,32 @@ function HomeScreen({
                 dark
                 icon={<CalendarDays />}
                 title="Book a Room"
-                text="View available times and reserve an MPR."
+                text="Choose a time and reserve a room."
                 onClick={onBook}
               />
               <HomeCard
-                icon={<Headphones />}
-                title="Equipment"
-                text="Check equipment locations and working conditions."
-                onClick={onEquipment}
-              />
-              <HomeCard
-                icon={<Users />}
-                title="Room Schedule"
-                text="See who is booked in each MPR today."
-                onClick={onSchedule}
+                icon={<CalendarDays />}
+                title="Room availability"
+                text="Compare room schedules."
+                onClick={onAvailability}
               />
               <HomeCard
                 icon={<CalendarDays />}
                 title="My Reservations"
-                text="Manage upcoming, active, and past sessions."
+                text="View and manage your sessions."
                 onClick={onReservations}
+              />
+              <HomeCard
+                icon={<Headphones />}
+                title="Equipment"
+                text="Check locations and working conditions."
+                onClick={onEquipment}
               />
               <HomeCard
                 icon={<TriangleAlert />}
                 title="Reports & Support"
                 text="Report an issue or contact FTS."
                 onClick={onSupport}
-              />
-              <HomeCard
-                icon={<MapPin />}
-                title="Equipment Movements"
-                text="Record actual moves and returns."
-                onClick={onMovements}
-              />
-              <HomeCard
-                icon={<ShieldCheck />}
-                title="Practice Fit & Rules"
-                text="Check live room suitability and published rules."
-                onClick={onPractice}
-              />
-              <HomeCard
-                icon={<ShieldCheck />}
-                title="Staff Workspace"
-                text="Staff sign in, catalog, triage and room operations."
-                onClick={onStaff}
               />
             </div>
           </div>
@@ -5723,7 +5652,7 @@ function HomeCard({
     </button>
   );
 }
-function ScheduleScreen({ back }: { back: () => void }) {
+function ScheduleScreen({ back, onSelect }: { back: () => void; onSelect?: (room: string, date: Date, index: number) => void }) {
   const [scheduleDate, setScheduleDate] = useState(() => new Date());
   const [schedule, setSchedule] = useState<ScheduleResponse | null>(null);
   const [failedDate, setFailedDate] = useState<string | null>(null);
@@ -5748,16 +5677,20 @@ function ScheduleScreen({ back }: { back: () => void }) {
   const loadFailed = failedDate === requestedDate;
   const isLoading = !loadFailed && schedule?.date !== requestedDate;
 
-  const days = Array.from({ length: 7 }, (_, offset) => {
+  const days = Array.from({ length: 2 }, (_, offset) => {
     const day = new Date();
     day.setDate(day.getDate() + offset);
     return day;
   });
 
+  return <Shell title="Room availability" subtitle="Compare room schedules." back={back}>
+    <RoomAvailabilityCalendar onHome={back} onSelect={onSelect} />
+  </Shell>;
+
   return (
     <Shell
-      title="Room Schedule"
-      subtitle="See who is booked in each MPR."
+      title="Room availability"
+      subtitle="Compare room availability for today and tomorrow."
       back={back}
     >
       <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -5818,9 +5751,6 @@ function ScheduleScreen({ back }: { back: () => void }) {
                       <span className="shrink-0 font-semibold">
                         {booking.startTime}–{booking.endTime}
                       </span>
-                      <span className="min-w-0 truncate text-right text-slate-600 dark:text-[#AAB3C7]">
-                        {booking.bookedBy}
-                      </span>
                     </li>
                   ))}
                 </ul>
@@ -5839,7 +5769,6 @@ function Slots({
   selectedSlots,
   setSelectedSlots,
   booked,
-  bookedBy,
   back,
   onChangeMpr,
   onContinue,
@@ -5850,7 +5779,6 @@ function Slots({
   selectedSlots: string[];
   setSelectedSlots: (slots: string[]) => void;
   booked: Set<string>;
-  bookedBy: Record<string, string>;
   back: () => void;
   onChangeMpr: () => void;
   onContinue: () => void;
@@ -6652,11 +6580,6 @@ function Slots({
               >
                 <span className="min-w-0">
                   <span className="block font-semibold">{slotLabel(t)}</span>
-                  {isBooked && bookedBy[t] ? (
-                    <span className="mt-0.5 block truncate text-xs font-normal text-slate-400 dark:text-[#8F9BB2]">
-                      Booked · {bookedBy[t]}
-                    </span>
-                  ) : null}
                 </span>
                 <span
                   className={`rounded-full px-2.5 py-1 text-xs font-bold ${

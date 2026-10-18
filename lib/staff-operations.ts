@@ -48,7 +48,16 @@ const equipmentColumns = `id, equipment_id AS equipmentId, name, type, model_nam
   notes, archived, photo_attachment_id AS photoAttachmentId, last_inspected_at AS lastInspectedAt`;
 
 // Reservation clocks are institution-local (UTC+05:30); midnight end means the following day.
-const bookingEnd = "julianday(b.date || 'T' || b.end_time, CASE WHEN b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')";
+async function supportsBookingEndDate(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
+function bookingEnd(hasEndDate: boolean): string {
+  return hasEndDate
+    ? "julianday(COALESCE(b.end_date, b.date) || 'T' || b.end_time, CASE WHEN COALESCE(b.end_date, b.date) = b.date AND b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')"
+    : "julianday(b.date || 'T' || b.end_time, CASE WHEN b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')";
+}
 const bookingStart = "julianday(b.date || 'T' || b.start_time, '-330 minutes')";
 
 function invalid(message: string, code = "CATALOG_INPUT_INVALID"): never {
@@ -146,8 +155,9 @@ export async function saveRoomCatalog(db: D1Database, actor: BookingActor, value
   if (Object.keys(values).length === 0) invalid("Supply at least one room catalog change.");
   const entries = Object.entries(values);
   const locationGuard = values.location_id === undefined ? "" : " AND EXISTS (SELECT 1 FROM locations WHERE id = ?)";
+  const endExpression = bookingEnd(await supportsBookingEndDate(db));
   const reservationGuard = values.is_active === 0 && roomId !== undefined
-    ? ` AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = rooms.id AND b.status = 'confirmed' AND ${bookingEnd} > julianday('now'))` : "";
+    ? ` AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = rooms.id AND b.status = 'confirmed' AND ${endExpression} > julianday('now'))` : "";
   const mutation = roomId === undefined
     ? db.prepare(`INSERT INTO rooms (${entries.map(([key]) => key).join(", ")}) SELECT ${entries.map(() => "?").join(", ")} WHERE ${staffExists}${locationGuard} RETURNING ${roomColumns}`)
       .bind(...entries.map(([, item]) => item), actor.userId, ...(values.location_id === undefined ? [] : [values.location_id]))
@@ -253,12 +263,13 @@ export async function actOnReport(db: D1Database, actor: BookingActor, reportId:
   } else {
     const startsAt = iso(body.startsAt, "Closure start");
     const endsAt = iso(body.endsAt, "Closure end");
+    const endExpression = bookingEnd(await supportsBookingEndDate(db));
     if (startsAt >= endsAt) invalid("Closure must end after it starts.", "CLOSURE_WINDOW_INVALID");
     insert = db.prepare(`INSERT INTO room_closures (room_id, starts_at, ends_at, reason, source_report_id, created_by_user_id)
       SELECT r.room_id, ?, ?, ?, r.id, ? FROM reports r JOIN rooms rm ON rm.id = r.room_id
       WHERE ${reportGuard} AND r.room_id = ? AND rm.is_active = 1
         AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = r.room_id AND b.status = 'confirmed'
-          AND ${bookingStart} < julianday(?) AND ${bookingEnd} > julianday(?))
+           AND ${bookingStart} < julianday(?) AND ${endExpression} > julianday(?))
         AND NOT EXISTS (SELECT 1 FROM room_closures c WHERE c.room_id = r.room_id AND c.is_active = 1
           AND julianday(c.starts_at) < julianday(?) AND julianday(c.ends_at) > julianday(?)) RETURNING id`)
       .bind(startsAt, endsAt, reason, actor.userId, reportId, expectedUpdatedAt, expectedStatus, actor.userId, target, endsAt, startsAt, endsAt, startsAt);

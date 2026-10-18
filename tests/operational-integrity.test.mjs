@@ -20,8 +20,8 @@ describe("Transaction-enforced reservation and closure boundaries", () => {
     await db.batch([
       db.prepare("INSERT INTO users (id,email,password_hash,salt,full_name,role) VALUES (1,'one@example.invalid','test','test','One','student'),(2,'two@example.invalid','test','test','Two','student'),(3,'tech@example.invalid','test','test','Tech','technician')"),
       db.prepare("INSERT INTO locations (id,code,name,type) VALUES (1,'room-1','Room 1','room'),(2,'room-2','Room 2','room')"),
-      db.prepare("INSERT INTO rooms (id,name,code,capacity,description,location_id,readiness_state) VALUES (1,'Room 1','room-1',6,'Test',1,'usable'),(2,'Room 2','room-2',6,'Test',2,'usable')"),
-      db.prepare("UPDATE booking_policies SET advance_days=36500"),
+      db.prepare("INSERT INTO rooms (id,name,code,capacity,description,location_id,readiness_state) VALUES (1,'MPR 2','mpr-2',6,'Test',1,'usable'),(2,'MPR 3','mpr-3',6,'Test',2,'usable')"),
+      db.prepare("UPDATE booking_policies SET advance_days=36500, student_window=0"),
     ]);
   });
   after(async () => connection?.dispose());

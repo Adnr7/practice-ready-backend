@@ -2,19 +2,29 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { rooms } from "@/db/schema";
 import { getRoomReadiness } from "@/lib/room-readiness";
+import { BOOKABLE_ROOM_CODES } from "@/lib/seed-data";
 
 export async function GET() {
   try {
     const db = getDb();
     const allRooms = await db
-      .select()
+      .select({
+        id: rooms.id,
+        name: rooms.name,
+        code: rooms.code,
+        capacity: rooms.capacity,
+        description: rooms.description,
+        isActive: rooms.isActive,
+      })
       .from(rooms)
       .where(eq(rooms.isActive, true))
       .orderBy(rooms.id);
 
-    const readiness = await Promise.all(allRooms.map((room) => getRoomReadiness(db.$client, room.id)));
+    const bookableRooms = allRooms.filter((room) => BOOKABLE_ROOM_CODES.includes(room.code as typeof BOOKABLE_ROOM_CODES[number]));
+
+    const readiness = await Promise.all(bookableRooms.map((room) => getRoomReadiness(db.$client, room.id)));
     return Response.json({
-      rooms: allRooms.map((room, index) => ({
+      rooms: bookableRooms.map((room, index) => ({
         ...room,
         readinessState: readiness[index]?.readinessState ?? "unknown",
         readinessNotes: readiness[index]?.readinessNotes ?? null,

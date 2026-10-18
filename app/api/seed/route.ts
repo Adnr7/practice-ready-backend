@@ -14,12 +14,11 @@ import {
   SEED_EQUIPMENT,
   SEED_LOCATIONS,
   SEED_ROOMS,
+  BOOKABLE_ROOM_CODES,
 } from "@/lib/seed-data";
 
 export async function POST(request: Request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const force = searchParams.get("force") === "true";
 
     configureAuthSecret(env.AUTH_SECRET);
     const session = await getSessionFromRequest(request);
@@ -31,25 +30,16 @@ export async function POST(request: Request) {
 
     const db = getDb();
 
-    // Check if database already has rooms and slots
-    const existingRooms = await db.select().from(rooms).limit(1);
-    const existingSlots = await db.select().from(timeSlots).limit(1);
+    // Older local seeds included Performance Hall. Keep such locations and
+    // their equipment-directory records, but never leave them bookable.
+    await db.$client.prepare(`
+      UPDATE rooms SET is_active = 0
+      WHERE code IN ('perf-hall', 'performance-hall', 'mpr-1')
+         OR name IN ('Performance Hall', 'MPR 1')
+    `).run();
 
-    if (existingRooms.length > 0 && existingSlots.length > 0 && !force) {
-      // Readiness migrations add the room/location relation after older seed
-      // data may already exist. Keep this repair idempotent even when the
-      // legacy early-return path is used.
-      for (const rm of SEED_ROOMS) {
-        await db.$client.prepare(`
-          UPDATE rooms SET location_id = (SELECT id FROM locations WHERE code = ? LIMIT 1)
-          WHERE code = ? AND location_id IS NULL
-        `).bind(rm.code, rm.code).run();
-      }
-      return Response.json({
-        message: "Database already seeded. Pass ?force=true to re-seed or update.",
-      });
-    }
-
+    const bookableRoomList = BOOKABLE_ROOM_CODES.map((code) => `'${code}'`).join(", ");
+    await db.$client.prepare(`UPDATE rooms SET is_active = 0 WHERE code NOT IN (${bookableRoomList})`).run();
     const [existingAdmin] = await db.select({ id: users.id }).from(users)
       .where(eq(users.email, "admin@tsm.edu.in")).limit(1);
     const adminPassword = env.ADMIN_PASSWORD;

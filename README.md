@@ -4,7 +4,7 @@
 
 Practice Ready is a student and facilities application for Music Practice Rooms (MPRs) at the True School of Music (TSM). This repository extends the original HCI prototype with a TypeScript backend on Cloudflare Workers and D1.
 
-**Current status:** the core student and staff workflows have persistent D1 implementations and live UI connections. Reservations, journals/photos, reports, suitability, movements, policy/contact reads, and a staff workspace are available locally. The full local suite passes **173 tests**. This is not a production-release or complete original-frontend parity claim: browser acceptance, remaining legacy discovery paths, and staging rollout are still open. See [current state](docs/CURRENT_STATE.md).
+**Current status:** the backend supports the current Asmi room, date-window, authentication, availability, booking, reservation, equipment, and reports/support contracts locally with persistent D1 storage. The full local suite passes **178 tests**. The deployed Worker/database has not been changed here; its current remote schema is known to be behind this migration sequence. See [current state](docs/CURRENT_STATE.md).
 
 ## Start with the project documents
 
@@ -95,7 +95,8 @@ make build
 make start
 ```
 
-The second apply reports **No migrations to apply**. The runner validates the journal/SQL sequence, runs preflight, then invokes the project's pinned `wrangler d1 migrations apply DB --local`. SQL `0000` through `0010` is applied in numeric order; each complete migration and its `d1_migrations` ledger insertion run in one D1 transaction. A failed migration rolls back; earlier successful migrations remain tracked. Wrangler's ledger records filenames, not SQL checksums: the corrected `0003` described below only runs where that migration is still pending. Never remove an applied ledger entry to force a replay.
+
+The second apply reports **No migrations to apply**. The runner validates the journal/SQL sequence, runs preflight, then invokes the project's pinned `wrangler d1 migrations apply DB --local`. SQL `0000` through `0011_asmi_overnight_bookings.sql` is applied in numeric order; each complete migration and its `d1_migrations` ledger insertion run in one D1 transaction. Migration `0011` adds overnight end dates, the Asmi student-window marker, and forward-safe overlap/closure triggers. A failed migration rolls back; earlier successful migrations remain tracked. Never remove an applied ledger entry to force a replay.
 
 Default persistence is `.wrangler/state`, shared by migrate and the built preview. Override **both** commands together for an isolated environment:
 
@@ -137,7 +138,7 @@ A nonzero exit blocks apply and reports concrete rows/object names for:
 
 The old explicit `d1 execute --file` loop created **untracked** databases. Do not replay it, reset a populated database, insert guessed ledger rows, delete duplicates, or automatically choose booking/location owners. Back up first, inspect schema/data with the owner, and develop an explicit reviewed reconciliation/baseline plan on a disposable copy. The runner deliberately offers no automatic adoption, reset, or destructive reconciliation. A schema-only export is insufficient for the data checks. Read-only preflight cannot recover history already lost by an earlier migration.
 
-**`db:generate` is explicitly disabled** and exits unsuccessfully. Snapshots exist only through `0003`, although the journal and SQL continue through `0010`; invoking Drizzle generation directly can recreate existing objects and omit hand-written constraints/triggers. Apply the existing SQL with `make db-migrate`. Re-enable generation only after repairing/reviewing the complete snapshot chain against a freshly migrated D1 database and proving unchanged schema produces no generated migration. Never use generation as bootstrap.
+**`db:generate` is explicitly disabled** and exits unsuccessfully. Snapshots exist only through `0003`, although the journal and SQL continue through `0011`; invoking Drizzle generation directly can recreate existing objects and omit hand-written constraints/triggers. Apply the existing SQL with `make db-migrate`. Re-enable generation only after repairing/reviewing the complete snapshot chain against a freshly migrated D1 database and proving unchanged schema produces no generated migration. Never use generation as bootstrap.
 
 ### Development and checks
 
@@ -182,7 +183,7 @@ The pinned Node image installs all dependencies using the existing frozen lockfi
 
 ### Setup verification — 2026-10-18
 
-`node scripts/rehearse-setup.mjs` passed a clean frozen install of 628 packages with pnpm 11.25.0, followed by an offline rerun; the lockfile was unchanged. The integrated suite passes **173 tests**, including **12 migration tests**, with typecheck/lint passing. The `0003` populated upgrade preserves every report/history column and ID with foreign keys ON. `node scripts/smoke-built.mjs` exercises the actual built Worker with disposable secrets and isolated D1 state, then removes that state. Earlier full smoke runs passed, but the latest pre-publication run and retry fail at Home SSR with Miniflare `Network connection lost` (HTTP 500); this remains a preview/release blocker. Docker is unavailable here, so Docker build/run remains unverified.
+`node scripts/rehearse-setup.mjs` passed a clean frozen install of 628 packages with pnpm 11.25.0, followed by an offline rerun; the lockfile was unchanged. The integrated suite passes **178 tests**, including **12 migration tests**, with typecheck/lint passing. The `0003` populated upgrade preserves every report/history column and ID with foreign keys ON. `node scripts/smoke-built.mjs` exercises the actual built Worker with disposable secrets and isolated D1 state and passes SSR, seed, auth/session restoration, booking replay, journal/image/report persistence, and staff boundaries. Docker is unavailable here, so Docker build/run remains unverified.
 
 ### Configuration
 
@@ -252,18 +253,18 @@ This table describes the implemented backend contract. The original frontend sti
 | GET/PUT | `/api/staff/movement-permissions` | Staff designation/revocation of exact equipment/destination pairs |
 | GET | `/api/equipment/:id/movements?bookingId=` | Permitted destinations for the active owner, all destinations for staff |
 
-Use **Home → Practice Fit & Rules**, **My Reservations → History & journal**, **Reports & Support**, and **Staff Workspace** to reach the connected flows. Student movement permission defaults to denied until staff designate an equipment/destination pair. Repair completion requires the latest passed inspection tied to that repair; it resolves the linked report atomically and never treats an ETA as an actual return.
+The student Home UI retains only the current Asmi actions: booking, room availability, reservations, equipment, and reports/support. The backend also retains role-gated FTS/admin routes for operational support; they are not new student navigation. Student movement permission defaults to denied until staff designate an equipment/destination pair. Repair completion requires the latest passed inspection tied to that repair; it resolves the linked report atomically and never treats an ETA as an actual return.
 
 ## Verification snapshot — 2026-10-18
 
 | Check | Result |
 |---|---|
 | Frozen dependency installation | Passed with pnpm 11.25.0 |
-| `make test` | **173 passed**, 0 failed; no cloud/network dependency after setup |
+| `make test` | **178 passed**, 0 failed; no cloud/network dependency after setup |
 | `make typecheck` | Passed |
 | `make build` | Passed; large client-chunk warning remains |
 | `make lint` | Passed with 4 existing `no-img-element` warnings |
-| `make smoke-built` | Build passed; latest smoke and retry failed at Home SSR with Miniflare network loss (HTTP 500), despite earlier passing runs |
+| `make smoke-built` | Passed; built Worker SSR, isolated seed, auth/session restoration, booking replay, and persistence |
 | Concurrent writes | Covered: booking claims, same-key creation, room closure versus booking, cross-room student overlap, movement revocation and repair updates |
 | Browser acceptance / Docker / remote deployment | Not verified |
 

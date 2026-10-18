@@ -1,4 +1,6 @@
+import { resolveBookingWindow } from "./booking-engine.ts";
 import { bookingInstant, RoomReadinessError } from "./room-readiness.ts";
+import { BOOKABLE_ROOM_CODES } from "./seed-data.ts";
 
 const STALE_INSPECTION_MS = 24 * 60 * 60 * 1000;
 
@@ -26,14 +28,21 @@ function addReason(reasons: Array<{ code: string; message: string; requirementKe
   reasons.push({ code, message, ...(requirementKey ? { requirementKey } : {}) });
 }
 
+async function supportsBookingEndDate(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
 export async function findSuitableRooms(
   db: D1Database,
-  input: { profile: string; date: string; startTime: string; endTime: string; partySize: number; amplified?: boolean; instrument?: string; bringOwnInstrument?: boolean },
+  input: { profile: string; date: string; endDate?: string; startTime: string; endTime: string; partySize: number; amplified?: boolean; instrument?: string; bringOwnInstrument?: boolean },
 ) {
   const code = profileCode(input);
   const profile = await db.prepare("SELECT id, code, name, category, description FROM practice_profiles WHERE code = ? AND is_active = 1 LIMIT 1").bind(code).first<{ id: number; code: string; name: string; category: string; description: string }>();
   if (!profile) throw new RoomReadinessError("Practice profile is not configured.", 422, "PRACTICE_PROFILE_UNAVAILABLE");
   if (!Number.isSafeInteger(input.partySize) || input.partySize < 1) throw new RoomReadinessError("partySize must be a positive integer.", 400, "PARTY_SIZE_INVALID");
+  const window = resolveBookingWindow({ date: input.date, endDate: input.endDate, startTime: input.startTime, endTime: input.endTime });
+  if (!window.valid) throw new RoomReadinessError(window.error, 400, "SUITABILITY_WINDOW_INVALID");
   const requirements = await db.prepare(`
     SELECT id, requirement_key AS requirementKey, label, equipment_type AS equipmentType,
       equipment_name_pattern AS equipmentNamePattern, quantity, is_hard AS isHard, student_supplied AS studentSupplied
@@ -47,8 +56,9 @@ export async function findSuitableRooms(
   `).all<{
     id: number; name: string; code: string; capacity: number; description: string; readinessState: string; readinessNotes: string | null; locationId: number | null; locationName: string | null;
   }>();
+  rooms.results = rooms.results.filter((room) => BOOKABLE_ROOM_CODES.includes(room.code as typeof BOOKABLE_ROOM_CODES[number]));
   const requestedStart = bookingInstant(input.date, input.startTime);
-  const requestedEnd = bookingInstant(input.date, input.endTime, true);
+  const requestedEnd = bookingInstant(input.date, input.endTime, true, window.window.endDate);
   const now = Date.now();
   const result = [];
 
@@ -93,8 +103,9 @@ export async function findSuitableRooms(
       hardBlock = true;
       addReason(reasons, "ROOM_CLOSED", `Closed during the requested time: ${closure.reason}`);
     }
-    const bookings = await db.prepare("SELECT date, start_time AS startTime, end_time AS endTime FROM bookings WHERE room_id = ? AND status = 'confirmed'").bind(room.id).all<{ date: string; startTime: string; endTime: string }>();
-    if (bookings.results.some((booking) => bookingInstant(booking.date, booking.startTime) < requestedEnd && bookingInstant(booking.date, booking.endTime, true) > requestedStart)) {
+    const hasEndDate = await supportsBookingEndDate(db);
+    const bookings = await db.prepare(`SELECT date, ${hasEndDate ? "end_date AS endDate," : ""} start_time AS startTime, end_time AS endTime FROM bookings WHERE room_id = ? AND status = 'confirmed'`).bind(room.id).all<{ date: string; endDate?: string | null; startTime: string; endTime: string }>();
+    if (bookings.results.some((booking) => bookingInstant(booking.date, booking.startTime) < requestedEnd && bookingInstant(booking.date, booking.endTime, true, booking.endDate) > requestedStart)) {
       hardBlock = true;
       addReason(reasons, "SLOT_UNAVAILABLE", "The room is already reserved for part of this time.");
     }

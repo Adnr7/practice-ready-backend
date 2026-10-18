@@ -83,6 +83,7 @@ export interface AvailabilityResponse {
 export interface BookingPayload {
   roomId: number;
   date: string;
+  endDate?: string;
   startTime: string;
   endTime: string;
   guestName?: string;
@@ -97,6 +98,7 @@ export interface BookingResult {
     roomId: number;
     roomName?: string;
     date: string;
+    endDate?: string;
     startTime: string;
     endTime: string;
     status: string;
@@ -115,6 +117,7 @@ export interface ReservationData {
   roomId: number;
   roomName?: string;
   date: string;
+  endDate?: string | null;
   startTime: string;
   endTime: string;
   durationMinutes: number;
@@ -487,7 +490,7 @@ export function cancelReservation(id: number, version?: number): Promise<Reserva
 
 export function rescheduleReservation(
   id: number,
-  payload: { roomId: number; date: string; startTime: string; endTime: string; version: number; reason?: string },
+  payload: { roomId: number; date: string; endDate?: string; startTime: string; endTime: string; version: number; reason?: string },
 ): Promise<ReservationMutationResult> {
   return mutateReservation(id, "PATCH", payload, "/reschedule");
 }

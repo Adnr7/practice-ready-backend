@@ -3,9 +3,10 @@ import {
   assertStudentMovementAllowed,
   MovementPermissionError,
   requireActiveMovementActor,
+  studentMovementReturnGuardFor,
+  studentMovementSessionGuardFor,
+  supportsBookingEndDate,
   studentMovementDesignationGuard,
-  studentMovementReturnGuard,
-  studentMovementSessionGuard,
 } from "./movement-permissions.ts";
 
 export type MovementRole = "student" | "technician" | "admin";
@@ -323,6 +324,9 @@ export async function createMovement(
   const movedAt = now();
   let results;
   try {
+    const hasEndDate = await supportsBookingEndDate(client);
+    const sessionGuard = studentMovementSessionGuardFor(hasEndDate);
+    const returnGuard = studentMovementReturnGuardFor(hasEndDate);
     results = await client.batch([
       client.prepare(`
         UPDATE equipment
@@ -332,7 +336,7 @@ export async function createMovement(
           AND current_location_id = ?
           AND archived = 0
           AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role = ? AND is_active = 1)
-          ${input.actor.role === "student" ? `AND ${studentMovementSessionGuard} AND ${studentMovementDesignationGuard} AND ${studentMovementReturnGuard}` : ""}
+           ${input.actor.role === "student" ? `AND ${sessionGuard} AND ${studentMovementDesignationGuard} AND ${returnGuard}` : ""}
           AND NOT EXISTS (
             SELECT 1 FROM equipment_movements
             WHERE equipment_id = ? AND status = 'open'

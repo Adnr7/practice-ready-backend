@@ -12,6 +12,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (!body || typeof body !== "object") return Response.json({ error: "Request body must be a JSON object." }, { status: 400 });
     const roomId = Number(body.roomId);
     const date = typeof body.date === "string" ? body.date.trim() : "";
+    const endDate = typeof body.endDate === "string" && body.endDate.trim() ? body.endDate.trim() : undefined;
     const startTime = typeof body.startTime === "string" ? body.startTime.trim() : "";
     const endTime = typeof body.endTime === "string" ? body.endTime.trim() : "";
     if (!Number.isSafeInteger(roomId) || roomId <= 0 || !date || !startTime || !endTime) {
@@ -22,6 +23,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       actor: { userId: session.userId, role: session.role },
       roomId,
       date,
+      endDate,
       startTime,
       endTime,
       version: parseVersion(body.version),

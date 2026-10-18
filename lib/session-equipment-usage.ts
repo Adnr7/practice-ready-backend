@@ -102,6 +102,7 @@ function assertActiveBooking(booking: BookingRow): void {
     booking.status,
     getInstitutionNow(),
     booking.sessionEndedAt,
+    booking.endDate,
   );
   if (phase !== "in_progress") {
     throw new SessionUsageError("Equipment can only be logged during an active reservation.", 409, "SESSION_USAGE_NOT_ACTIVE");

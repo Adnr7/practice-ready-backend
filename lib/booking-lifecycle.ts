@@ -3,11 +3,13 @@ import {
   getInstitutionNow,
   isStartInPast,
   validateBookingRequest,
+  type BookingSlotRef,
   type BookingPhase,
 } from "./booking-engine.ts";
 import { getBookingPolicy, getCurrentBookingPolicy } from "./booking-policy.ts";
 import { cancelStoredBooking } from "./booking-store.ts";
 import { operationalConflictResponse } from "./operational-conflicts.ts";
+import { BOOKABLE_ROOM_CODES } from "./seed-data.ts";
 
 export type BookingActor = {
   userId: number;
@@ -23,6 +25,7 @@ export type BookingRow = {
   roomId: number;
   roomName: string;
   date: string;
+  endDate: string | null;
   startTime: string;
   endTime: string;
   durationMinutes: number;
@@ -87,8 +90,8 @@ function isStaff(actor: BookingActor): boolean {
   return actor.role === "technician" || actor.role === "admin";
 }
 
-function phaseFor(row: Pick<BookingRow, "date" | "startTime" | "endTime" | "status" | "sessionEndedAt">): BookingPhase {
-  return deriveBookingPhase(row.date, row.startTime, row.endTime, row.status, getInstitutionNow(), row.sessionEndedAt);
+function phaseFor(row: Pick<BookingRow, "date" | "endDate" | "startTime" | "endTime" | "status" | "sessionEndedAt">): BookingPhase {
+  return deriveBookingPhase(row.date, row.startTime, row.endTime, row.status, getInstitutionNow(), row.sessionEndedAt, row.endDate);
 }
 
 function toView(row: BookingRow): BookingView {
@@ -96,6 +99,8 @@ function toView(row: BookingRow): BookingView {
 }
 
 export async function getBookingRow(db: D1Database, bookingId: number): Promise<BookingRow | null> {
+  const hasEndDate = await hasBookingEndDate(db);
+  const hasPolicyVersion = Boolean((await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'policy_version' LIMIT 1").first<{ present: number }>())?.present);
   return db.prepare(`
     SELECT b.id,
       b.booking_ref AS bookingRef,
@@ -105,10 +110,11 @@ export async function getBookingRow(db: D1Database, bookingId: number): Promise<
       b.room_id AS roomId,
       r.name AS roomName,
       b.date,
+      ${hasEndDate ? "b.end_date AS endDate," : ""}
       b.start_time AS startTime,
       b.end_time AS endTime,
       b.duration_minutes AS durationMinutes,
-      b.policy_version AS policyVersion,
+       ${hasPolicyVersion ? "b.policy_version" : "NULL"} AS policyVersion,
       b.status,
       b.version,
       b.session_ended_at AS sessionEndedAt,
@@ -120,7 +126,7 @@ export async function getBookingRow(db: D1Database, bookingId: number): Promise<
     JOIN rooms r ON r.id = b.room_id
     WHERE b.id = ?
     LIMIT 1
-  `).bind(bookingId).first<BookingRow>();
+  `).bind(bookingId).first<BookingRow>().then((row) => row ? { ...row, endDate: row.endDate ?? row.date } : null);
 }
 
 export function assertBookingAccess(row: BookingRow, actor: BookingActor): void {
@@ -147,25 +153,36 @@ async function hasLifecycleTables(db: D1Database): Promise<boolean> {
   return Boolean(row?.present);
 }
 
-async function targetSlotCount(
+async function hasBookingEndDate(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
+function slotPredicate(alias: string, refs: BookingSlotRef[]): { sql: string; bindings: string[] } {
+  return {
+    sql: refs.map(() => `(${alias}.date = ? AND ${alias}.start_time = ?)`).join(" OR "),
+    bindings: refs.flatMap((ref) => [ref.date, ref.startTime]),
+  };
+}
+
+async function targetSlotCountForRefs(
   db: D1Database,
   roomId: number,
-  date: string,
-  requiredSlots: string[],
+  requiredSlots: BookingSlotRef[],
   bookingId: number,
 ): Promise<{ count: number; conflictingSlots: string[] }> {
-  const placeholders = requiredSlots.map(() => "?").join(", ");
+  const slots = slotPredicate("s", requiredSlots);
   const rows = await db.prepare(`
     SELECT s.start_time AS startTime,
       CASE WHEN s.status = 'available' OR own.time_slot_id IS NOT NULL THEN 1 ELSE 0 END AS eligible
     FROM time_slots s
     LEFT JOIN booking_claims own ON own.time_slot_id = s.id AND own.booking_id = ?
     LEFT JOIN booking_claims other ON other.time_slot_id = s.id AND other.booking_id <> ?
-    WHERE s.room_id = ? AND s.date = ? AND s.start_time IN (${placeholders})
+    WHERE s.room_id = ? AND (${slots.sql})
       AND other.time_slot_id IS NULL
-  `).bind(bookingId, bookingId, roomId, date, ...requiredSlots).all<{ startTime: string; eligible: number }>();
-  const byStart = new Map(rows.results.map((row) => [row.startTime, row]));
-  const conflictingSlots = requiredSlots.filter((startTime) => !byStart.get(startTime)?.eligible);
+  `).bind(bookingId, bookingId, roomId, ...slots.bindings).all<{ startTime: string; eligible: number }>();
+  const byStart = new Map(rows.results.map((row) => [`${row.startTime}`, row]));
+  const conflictingSlots = requiredSlots.filter((slot) => !byStart.get(slot.startTime)?.eligible).map((slot) => slot.startTime);
   return { count: requiredSlots.length - conflictingSlots.length, conflictingSlots };
 }
 
@@ -181,6 +198,7 @@ export async function rescheduleBooking(
     actor: BookingActor;
     roomId: number;
     date: string;
+    endDate?: string;
     startTime: string;
     endTime: string;
     version: number;
@@ -202,15 +220,16 @@ export async function rescheduleBooking(
   }
 
   const policy = await getCurrentBookingPolicy(db);
-  const validation = validateBookingRequest({ date: input.date, startTime: input.startTime, endTime: input.endTime }, getInstitutionNow(), policy);
+  const validation = validateBookingRequest({ date: input.date, endDate: input.endDate, startTime: input.startTime, endTime: input.endTime }, getInstitutionNow(), policy);
   if (!validation.valid || !validation.requiredSlots || !validation.durationMinutes) {
     throw new BookingLifecycleError(validation.error ?? "Invalid reschedule window.", 400, "BOOKING_WINDOW_INVALID");
   }
 
-  const room = await db.prepare("SELECT id FROM rooms WHERE id = ? AND is_active = 1 LIMIT 1").bind(input.roomId).first<{ id: number }>();
-  if (!room) throw new BookingLifecycleError("Selected room does not exist or is inactive.", 404, "ROOM_NOT_FOUND");
+  const room = await db.prepare("SELECT id, code FROM rooms WHERE id = ? AND is_active = 1 LIMIT 1").bind(input.roomId).first<{ id: number; code: string }>();
+  if (!room || !BOOKABLE_ROOM_CODES.includes(room.code as typeof BOOKABLE_ROOM_CODES[number])) throw new BookingLifecycleError("Selected room does not exist or is inactive.", 404, "ROOM_NOT_FOUND");
 
-  const target = await targetSlotCount(db, input.roomId, input.date, validation.requiredSlots, input.bookingId);
+  const targetRefs = validation.requiredSlotRefs ?? validation.requiredSlots.map((startTime) => ({ date: input.date, startTime }));
+  const target = await targetSlotCountForRefs(db, input.roomId, targetRefs, input.bookingId);
   if (target.count !== validation.requiredSlots.length) {
     throw new BookingLifecycleError(
       "One or more selected slots are no longer available.",
@@ -221,7 +240,11 @@ export async function rescheduleBooking(
   }
 
   const token = crypto.randomUUID();
-  const placeholders = validation.requiredSlots.map(() => "?").join(", ");
+  const targetPredicate = slotPredicate("s", targetRefs);
+  const candidatePredicate = slotPredicate("s", targetRefs);
+  const oldTargetPredicate = slotPredicate("time_slots", targetRefs);
+  const hasEndDate = await hasBookingEndDate(db);
+  const endDateUpdate = hasEndDate ? "end_date = ?, " : "";
   const now = new Date().toISOString();
   const results = await db.batch([
     db.prepare(`
@@ -232,35 +255,35 @@ export async function rescheduleBooking(
              FROM time_slots s
              LEFT JOIN booking_claims own ON own.time_slot_id = s.id AND own.booking_id = ?
              LEFT JOIN booking_claims other ON other.time_slot_id = s.id AND other.booking_id <> ?
-             WHERE s.room_id = ? AND s.date = ? AND s.start_time IN (${placeholders})
+             WHERE s.room_id = ? AND (${targetPredicate.sql})
                AND other.time_slot_id IS NULL
                AND (s.status = 'available' OR own.time_slot_id IS NOT NULL)) = ?
     `).bind(
       token, input.bookingId, input.version, input.bookingId, input.bookingId,
-      input.roomId, input.date, ...validation.requiredSlots, validation.requiredSlots.length,
+      input.roomId, ...targetPredicate.bindings, validation.requiredSlots.length,
     ),
     db.prepare(`
       INSERT OR IGNORE INTO booking_claims (time_slot_id, booking_id)
       SELECT s.id, ? FROM time_slots s
-      WHERE s.room_id = ? AND s.date = ? AND s.start_time IN (${placeholders})
+       WHERE s.room_id = ? AND (${candidatePredicate.sql})
         AND s.status = 'available'
         AND NOT EXISTS (SELECT 1 FROM booking_claims c WHERE c.time_slot_id = s.id)
         AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.mutation_token = ?)
-    `).bind(input.bookingId, input.roomId, input.date, ...validation.requiredSlots, input.bookingId, token),
+    `).bind(input.bookingId, input.roomId, ...candidatePredicate.bindings, input.bookingId, token),
     db.prepare(`
       DELETE FROM booking_claims
       WHERE booking_id = ?
-        AND time_slot_id NOT IN (
-          SELECT id FROM time_slots WHERE room_id = ? AND date = ? AND start_time IN (${placeholders})
-        )
+         AND time_slot_id NOT IN (
+           SELECT id FROM time_slots WHERE room_id = ? AND (${oldTargetPredicate.sql})
+         )
         AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.mutation_token = ?)
-    `).bind(input.bookingId, input.roomId, input.date, ...validation.requiredSlots, input.bookingId, token),
+    `).bind(input.bookingId, input.roomId, ...oldTargetPredicate.bindings, input.bookingId, token),
     db.prepare(`
       INSERT OR IGNORE INTO booking_slots (booking_id, time_slot_id)
-      SELECT ?, id FROM time_slots
-      WHERE room_id = ? AND date = ? AND start_time IN (${placeholders})
+       SELECT ?, s.id FROM time_slots s
+       WHERE s.room_id = ? AND (${targetPredicate.sql})
         AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.mutation_token = ?)
-    `).bind(input.bookingId, input.roomId, input.date, ...validation.requiredSlots, input.bookingId, token),
+    `).bind(input.bookingId, input.roomId, ...targetPredicate.bindings, input.bookingId, token),
     db.prepare(`
       INSERT INTO booking_history
         (booking_id, actor_user_id, action, previous_room_id, previous_date, previous_start_time, previous_end_time,
@@ -274,9 +297,9 @@ export async function rescheduleBooking(
     ),
     db.prepare(`
       UPDATE bookings
-       SET room_id = ?, date = ?, start_time = ?, end_time = ?, duration_minutes = ?, policy_version = ?, mutation_token = NULL
+       SET room_id = ?, date = ?, ${endDateUpdate}start_time = ?, end_time = ?, duration_minutes = ?, policy_version = ?, mutation_token = NULL
        WHERE id = ? AND mutation_token = ?
-     `).bind(input.roomId, input.date, input.startTime, input.endTime, validation.durationMinutes, policy.version, input.bookingId, token),
+      `).bind(...(hasEndDate ? [input.roomId, input.date, validation.endDate] : [input.roomId, input.date]), ...(hasEndDate ? [input.startTime, input.endTime] : [input.startTime, input.endTime]), validation.durationMinutes, policy.version, input.bookingId, token),
     db.prepare(`
       UPDATE time_slots SET status = 'booked'
       WHERE id IN (SELECT time_slot_id FROM booking_claims WHERE booking_id = ?)

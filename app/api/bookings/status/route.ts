@@ -1,10 +1,15 @@
 import { eq } from "drizzle-orm";
+import { env } from "cloudflare:workers";
 import { getDb } from "@/db";
 import { bookings, rooms } from "@/db/schema";
-import { deriveBookingPhase } from "@/lib/booking-engine";
+import { configureAuthSecret, getSessionFromRequest } from "@/lib/auth";
+import { deriveBookingPhase, getInstitutionNow } from "@/lib/booking-engine";
 
 export async function GET(request: Request) {
   try {
+    configureAuthSecret(env.AUTH_SECRET);
+    const session = await getSessionFromRequest(request);
+    if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
     const { searchParams } = new URL(request.url);
     const ref = (searchParams.get("ref") ?? "").trim();
 
@@ -16,15 +21,16 @@ export async function GET(request: Request) {
     }
 
     const db = getDb();
+    const hasEndDate = Boolean((await db.$client.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>())?.present);
     const [booking] = await db
       .select({
+        userId: bookings.userId,
         bookingRef: bookings.bookingRef,
-        guestStudentName: bookings.guestStudentName,
         date: bookings.date,
         startTime: bookings.startTime,
         endTime: bookings.endTime,
         status: bookings.status,
-        roomName: rooms.name,
+         roomName: rooms.name,
       })
       .from(bookings)
       .leftJoin(rooms, eq(bookings.roomId, rooms.id))
@@ -34,12 +40,21 @@ export async function GET(request: Request) {
     if (!booking) {
       return Response.json({ error: "Booking not found." }, { status: 404 });
     }
+    if (session.role === "student" && booking.userId !== session.userId) {
+      return Response.json({ error: "Forbidden." }, { status: 403 });
+    }
+    const endDateRow = hasEndDate
+      ? await db.$client.prepare("SELECT end_date AS endDate FROM bookings WHERE booking_ref = ? LIMIT 1").bind(ref).first<{ endDate: string | null }>()
+      : null;
+    const endDate = endDateRow?.endDate ?? booking.date;
 
     const phase = deriveBookingPhase(
       booking.date,
       booking.startTime,
       booking.endTime,
-      booking.status
+      booking.status,
+      getInstitutionNow(),
+      endDate
     );
 
     return Response.json({
@@ -47,10 +62,10 @@ export async function GET(request: Request) {
         bookingRef: booking.bookingRef,
         roomName: booking.roomName,
         date: booking.date,
+        endDate,
         startTime: booking.startTime,
         endTime: booking.endTime,
         status: booking.status,
-        guestStudentName: booking.guestStudentName,
       },
       phase,
     });

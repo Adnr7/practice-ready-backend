@@ -1,17 +1,21 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bookingSlots, bookings, rooms, timeSlots, users } from "@/db/schema";
+import { bookingSlots, bookings, rooms, timeSlots } from "@/db/schema";
 import {
   generateDailyTimeSlots,
   getInstitutionNow,
   isStartInPast,
   isValidCalendarDate,
+  isWithinAsmiStudentWindow,
   normalizeEndMinutes,
+  resolveBookingWindow,
   timeToMinutes,
   type TimePeriod,
 } from "@/lib/booking-engine";
 import { bookingInstant } from "@/lib/room-readiness";
 import { getCurrentBookingPolicy } from "@/lib/booking-policy";
+import { BOOKABLE_ROOM_CODES } from "@/lib/seed-data";
+import { hasRoomReadinessSchema, schemaMigrationResponse } from "@/lib/schema-capabilities";
 
 export async function GET(request: Request) {
   try {
@@ -42,6 +46,9 @@ export async function GET(request: Request) {
     }
 
     const db = getDb();
+    if (!(await hasRoomReadinessSchema(db.$client))) {
+      return schemaMigrationResponse("Room readiness migration is required before availability can be trusted.", { migration: "0006_room_readiness.sql" });
+    }
 
     // Verify room exists
     const [room] = await db
@@ -50,19 +57,30 @@ export async function GET(request: Request) {
       .where(eq(rooms.id, roomId))
       .limit(1);
 
-    if (!room) {
+    const roomRecord = room as (typeof room & { code?: string }) | undefined;
+    if (!roomRecord) {
       return Response.json({ error: "Room not found." }, { status: 404 });
     }
+    const roomCode = await db.$client.prepare("SELECT code FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ code: string }>();
+    if (!roomCode || !BOOKABLE_ROOM_CODES.includes(roomCode.code as typeof BOOKABLE_ROOM_CODES[number])) {
+      return Response.json({ error: "Room is not available for student booking." }, { status: 404 });
+    }
 
-    const roomState = await db.$client.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: string }>();
-    const closures = await db.$client.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM room_closures WHERE room_id = ? AND is_active = 1").bind(roomId).all<{ startsAt: string; endsAt: string }>();
+    const roomColumns = await db.$client.prepare("SELECT name FROM pragma_table_info('rooms')").all<{ name: string }>();
+    const hasReadiness = roomColumns.results.some((column) => column.name === "readiness_state");
+    const roomState = hasReadiness
+      ? await db.$client.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: string }>()
+      : { readinessState: "usable" };
+    const hasClosures = Boolean((await db.$client.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'room_closures' LIMIT 1").first<{ present: number }>())?.present);
+    const closures = hasClosures
+      ? await db.$client.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM room_closures WHERE room_id = ? AND is_active = 1").bind(roomId).all<{ startsAt: string; endsAt: string }>()
+      : { results: [] as Array<{ startsAt: string; endsAt: string }> };
     const roomClosed = roomState?.readinessState === "closed";
 
     const now = getInstitutionNow();
     const policy = await getCurrentBookingPolicy(db.$client);
     const policyOpening = timeToMinutes(policy.openingTime);
     const policyClosing = normalizeEndMinutes(policy.closingTime);
-    const policyLimit = Date.parse(`${now.date}T00:00:00Z`) + policy.advanceDays * 86_400_000;
     const isPastDate = dateParam < now.date;
     const isToday = dateParam === now.date;
 
@@ -122,30 +140,29 @@ export async function GET(request: Request) {
     }
     slots = [...uniqueSlots.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
 
-    // Resolve the display name of the confirmed booking holding each booked slot
-    // so clients can show who is in the room.
+    // Availability is an occupancy surface. Student-facing responses must not
+    // disclose another student's identity; reservation ownership is available
+    // through the authenticated reservations routes instead.
     const bookedSlotIds = slots
       .filter((slot) => slot.status === "booked")
       .map((slot) => slot.id);
 
-    const bookedByBySlotId = new Map<number, string>();
+    const confirmedSlotIds = new Set<number>();
     if (bookedSlotIds.length > 0) {
       const links = await db
         .select({
           timeSlotId: bookingSlots.timeSlotId,
-          userName: users.fullName,
-          guestName: bookings.guestStudentName,
           bookingStatus: bookings.status,
         })
         .from(bookingSlots)
         .innerJoin(bookings, eq(bookingSlots.bookingId, bookings.id))
-        .leftJoin(users, eq(bookings.userId, users.id))
         .where(inArray(bookingSlots.timeSlotId, bookedSlotIds));
 
       for (const link of links) {
         if (link.bookingStatus !== "confirmed") continue;
-        const name = link.userName ?? link.guestName;
-        if (name) bookedByBySlotId.set(link.timeSlotId, name);
+        confirmedSlotIds.add(link.timeSlotId);
+        // Keep the map keyed for the confirmed-slot check, but intentionally do
+        // not expose user or guest names in the response.
       }
     }
 
@@ -158,13 +175,16 @@ export async function GET(request: Request) {
       const slotStart = bookingInstant(dateParam, slot.startTime);
       const slotEnd = bookingInstant(dateParam, slot.endTime, true);
       const closed = roomClosed || closures.results.some((closure) => Date.parse(closure.startsAt) < slotEnd && Date.parse(closure.endsAt) > slotStart);
-      const outsidePolicyWindow = timeToMinutes(slot.startTime) < policyOpening || normalizeEndMinutes(slot.endTime) > policyClosing || Date.parse(`${dateParam}T00:00:00Z`) > policyLimit;
+      const resolvedSlot = resolveBookingWindow({ date: slot.date, startTime: slot.startTime, endTime: slot.endTime });
+      const withinStudentWindow = resolvedSlot.valid && isWithinAsmiStudentWindow(resolvedSlot.window, now);
+      const outsidePolicyWindow = !withinStudentWindow || timeToMinutes(slot.startTime) < policyOpening || normalizeEndMinutes(slot.endTime) > policyClosing;
+      const baseStatus = slot.status === "booked" && !confirmedSlotIds.has(slot.id) ? "available" as const : slot.status;
       return {
         ...slot,
         status:
-          (closed || outsidePolicyWindow) && slot.status === "available" ? ("maintenance" as const) : passed && slot.status === "available" ? ("booked" as const) : slot.status,
+          (closed || outsidePolicyWindow) && baseStatus === "available" ? ("maintenance" as const) : passed && baseStatus === "available" ? ("booked" as const) : baseStatus,
         passed,
-        bookedBy: slot.status === "booked" ? (bookedByBySlotId.get(slot.id) ?? null) : null,
+        bookedBy: null,
       };
     });
 

@@ -110,27 +110,40 @@ export async function saveMovementPermission(db: D1Database, actor: MovementActo
 
 // Both guards refer to the outer `equipment` row. Bind bookingId, ownerId, then destinationId.
 // Booking wall clocks use UTC+05:30; a 00:00 end is the following midnight.
-const bookingEnd = "julianday(b.date || 'T' || b.end_time, CASE WHEN b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')";
-export const studentMovementSessionGuard = `EXISTS (
+export async function supportsBookingEndDate(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
+}
+
+function bookingEnd(hasEndDate: boolean): string {
+  return hasEndDate
+    ? "julianday(COALESCE(b.end_date, b.date) || 'T' || b.end_time, CASE WHEN COALESCE(b.end_date, b.date) = b.date AND b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')"
+    : "julianday(b.date || 'T' || b.end_time, CASE WHEN b.end_time = '00:00' THEN '+1 day' ELSE '+0 day' END, '-330 minutes')";
+}
+
+export function studentMovementSessionGuardFor(hasEndDate: boolean): string { return `EXISTS (
   SELECT 1 FROM bookings b JOIN rooms r ON r.id = b.room_id
   WHERE b.id = ? AND b.user_id = ? AND b.status = 'confirmed' AND b.session_ended_at IS NULL
     AND r.is_active = 1 AND r.id = equipment.default_room_id AND r.location_id = equipment.current_location_id
     AND julianday(b.date || 'T' || b.start_time, '-330 minutes') < julianday(strftime('%Y-%m-%dT%H:%M:00Z', 'now'))
-    AND ${bookingEnd} > julianday('now')
-)`;
+    AND ${bookingEnd(hasEndDate)} > julianday('now')
+)`; }
 export const studentMovementDesignationGuard = `EXISTS (
   SELECT 1 FROM movement_permissions p
   WHERE p.equipment_id = equipment.id AND p.to_location_id = ? AND p.is_active = 1
 )`;
 // Bind expectedReturnAt twice, then bookingId. The timestamp is strictly validated before binding.
-export const studentMovementReturnGuard = `julianday(?) > julianday('now')
-  AND julianday(?) <= (SELECT min(julianday('now', '+3 hours'), ${bookingEnd}) FROM bookings b WHERE b.id = ?)`;
+export function studentMovementReturnGuardFor(hasEndDate: boolean): string { return `julianday(?) > julianday('now')
+  AND julianday(?) <= (SELECT min(julianday('now', '+3 hours'), ${bookingEnd(hasEndDate)}) FROM bookings b WHERE b.id = ?)`; }
+export const studentMovementSessionGuard = studentMovementSessionGuardFor(true);
+export const studentMovementReturnGuard = studentMovementReturnGuardFor(true);
 
 async function requireStudentSession(db: D1Database, actor: MovementActor, equipmentId: number, bookingId?: number): Promise<void> {
   positiveId(equipmentId, "Equipment id");
   if (bookingId === undefined) throw new MovementPermissionError("Student equipment moves must be linked to an active reservation.", 403, "MOVEMENT_BOOKING_REQUIRED");
   positiveId(bookingId, "Booking id");
-  const eligible = await db.prepare(`SELECT id FROM equipment WHERE id = ? AND archived = 0 AND ${studentMovementSessionGuard}`)
+  const sessionGuard = studentMovementSessionGuardFor(await supportsBookingEndDate(db));
+  const eligible = await db.prepare(`SELECT id FROM equipment WHERE id = ? AND archived = 0 AND ${sessionGuard}`)
     .bind(equipmentId, bookingId, actor.userId).first();
   if (!eligible) throw new MovementPermissionError("The equipment must be present in your active reservation's room.", 403, "MOVEMENT_SESSION_NOT_ELIGIBLE");
 }
@@ -148,7 +161,8 @@ export async function assertStudentMovementAllowed(db: D1Database, input: {
 }): Promise<void> {
   await requireStudentSession(db, input.actor, input.equipmentId, input.bookingId);
   await assertStudentMovementDesignation(db, input.equipmentId, input.toLocationId);
-  const returnWindow = input.expectedReturnAt && await db.prepare(`SELECT id FROM equipment WHERE id = ? AND ${studentMovementReturnGuard}`)
+  const returnGuard = studentMovementReturnGuardFor(await supportsBookingEndDate(db));
+  const returnWindow = input.expectedReturnAt && await db.prepare(`SELECT id FROM equipment WHERE id = ? AND ${returnGuard}`)
     .bind(input.equipmentId, input.expectedReturnAt, input.expectedReturnAt, input.bookingId).first();
   if (!returnWindow) throw new MovementPermissionError("Student moves require a future return time within three hours and before the session ends.", 400, "MOVEMENT_RETURN_WINDOW_INVALID");
 }

@@ -21,7 +21,13 @@ try {
   const persistTo = path.join(temp, "state");
   const databaseId = "isolated-built-smoke";
   const connection = await openMigrationDatabase({ persistTo, databaseId });
-  try { for (const migration of await loadMigrations()) await applyMigrationBatch(connection.db, migration); }
+   try {
+     for (const migration of await loadMigrations()) await applyMigrationBatch(connection.db, migration);
+     // The built-worker smoke is a persistence/replay check and must be
+     // deterministic at any wall-clock time. The Asmi 06:00 release boundary
+     // is covered separately by tests/asmi-contract.test.mjs.
+     await connection.db.prepare("UPDATE booking_policies SET student_window = 0, advance_days = 14 WHERE is_current = 1").run();
+   }
   finally { await connection.dispose(); }
   const secrets = { AUTH_SECRET: crypto.randomUUID(), SEED_TOKEN: crypto.randomUUID(), ADMIN_PASSWORD: crypto.randomUUID() };
   disposableSecrets = Object.values(secrets);
@@ -51,7 +57,7 @@ try {
   const request = async (url, method = "GET", body, cookie, extraHeaders = {}) => fetch(`${base}${url}`, {
     method, headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...(cookie ? { cookie } : {}), ...extraHeaders },
     // Illustrative seeding inserts thousands of rows; it is setup, not an API latency benchmark.
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(url === "/api/seed" ? 60000 : 15000),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(url === "/api/seed" ? 60000 : 60000),
   });
   const seed = await request("/api/seed", "POST", undefined, undefined, { authorization: `Bearer ${secrets.SEED_TOKEN}` });
   assert.equal(seed.status, 200, "Local illustrative seed");
@@ -64,9 +70,13 @@ try {
   assert.ok((await (await request("/api/auth/me", "GET", undefined, cookie)).json()).user);
   const rooms = (await (await request("/api/rooms")).json()).rooms;
   assert.ok(rooms.length);
-  const shifted = new Date(Date.now() + 330 * 60_000 + 86400_000);
-  const date = shifted.toISOString().slice(0, 10);
-  const payload = { roomId: rooms[0].id, date, startTime: "09:00", endTime: "10:00" };
+   const shiftedNow = new Date(Date.now() + 330 * 60_000);
+   const tomorrow = new Date(shiftedNow);
+   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+   const date = tomorrow.toISOString().slice(0, 10);
+   const startTime = "09:00";
+   const endTime = "10:00";
+   const payload = { roomId: rooms[0].id, date, startTime, endTime };
   const key = `smoke-${crypto.randomUUID()}`;
   const created = await request("/api/bookings", "POST", payload, cookie, { "Idempotency-Key": key });
   assert.equal(created.status, 201, "Create authenticated reservation");

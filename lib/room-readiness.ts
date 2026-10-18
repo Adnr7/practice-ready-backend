@@ -74,25 +74,37 @@ function parseIso(value: unknown, label: string, nullable = false): string | nul
 }
 
 export async function getRoomReadiness(db: D1Database, roomId: number, now = new Date()): Promise<RoomReadiness | null> {
+  const roomColumns = await db.prepare("SELECT name FROM pragma_table_info('rooms')").all<{ name: string }>();
+  const columns = new Set(roomColumns.results.map((column) => column.name));
+  const hasLocation = columns.has("location_id");
+  const hasReadiness = columns.has("readiness_state");
   const room = await db.prepare(`
     SELECT r.id, r.name, r.code, r.capacity, r.description, r.is_active AS isActive,
-      r.location_id AS locationId, l.name AS locationName,
-      r.readiness_state AS readinessState, r.readiness_notes AS readinessNotes,
-      r.readiness_verified_at AS readinessVerifiedAt
-    FROM rooms r LEFT JOIN locations l ON l.id = r.location_id
+      ${hasLocation ? "r.location_id" : "NULL"} AS locationId,
+      ${hasLocation ? "l.name" : "NULL"} AS locationName,
+      ${hasReadiness ? "r.readiness_state" : "'unknown'"} AS readinessState,
+      ${hasReadiness ? "r.readiness_notes" : "NULL"} AS readinessNotes,
+      ${hasReadiness ? "r.readiness_verified_at" : "NULL"} AS readinessVerifiedAt
+    FROM rooms r ${hasLocation ? "LEFT JOIN locations l ON l.id = r.location_id" : ""}
     WHERE r.id = ? LIMIT 1
   `).bind(roomId).first<RoomReadiness>();
   if (!room) return null;
-  const restrictions = await db.prepare(`
-    SELECT id, activity_key AS activityKey, state, explanation
-    FROM room_restrictions WHERE room_id = ? AND is_active = 1 ORDER BY activity_key, id
-  `).bind(roomId).all<RoomReadiness["restrictions"][number]>();
-  const activeClosures = await db.prepare(`
-    SELECT id, starts_at AS startsAt, ends_at AS endsAt, reason
-    FROM room_closures
-    WHERE room_id = ? AND is_active = 1 AND ends_at > ?
-    ORDER BY starts_at
-  `).bind(roomId, now.toISOString()).all<RoomReadiness["activeClosures"][number]>();
+  const hasRestrictions = Boolean((await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'room_restrictions' LIMIT 1").first<{ present: number }>())?.present);
+  const hasClosures = Boolean((await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'room_closures' LIMIT 1").first<{ present: number }>())?.present);
+  const restrictions = hasRestrictions
+    ? await db.prepare(`
+      SELECT id, activity_key AS activityKey, state, explanation
+      FROM room_restrictions WHERE room_id = ? AND is_active = 1 ORDER BY activity_key, id
+    `).bind(roomId).all<RoomReadiness["restrictions"][number]>()
+    : { results: [] as RoomReadiness["restrictions"] };
+  const activeClosures = hasClosures
+    ? await db.prepare(`
+      SELECT id, starts_at AS startsAt, ends_at AS endsAt, reason
+      FROM room_closures
+      WHERE room_id = ? AND is_active = 1 AND ends_at > ?
+      ORDER BY starts_at
+    `).bind(roomId, now.toISOString()).all<RoomReadiness["activeClosures"][number]>()
+    : { results: [] as RoomReadiness["activeClosures"] };
   return {
     ...room,
     isActive: Boolean(room.isActive),
@@ -147,18 +159,26 @@ export async function updateRoomReadiness(
   return updated;
 }
 
-export function bookingInstant(date: string, time: string, isEnd = false): number {
-  const minutes = isEnd && time === "00:00" ? 1440 : Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+export function bookingInstant(date: string, time: string, isEnd = false, endDate?: string | null): number {
+  const minutes = isEnd && time === "00:00" && (!endDate || endDate === date) ? 1440 : Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
   const [year, month, day] = date.split("-").map(Number);
-  return Date.UTC(year, month - 1, day, 0, minutes) - 330 * 60_000;
+  const endDay = isEnd && endDate && endDate !== date ? endDate : date;
+  const [endYear, endMonth, endDayOfMonth] = endDay.split("-").map(Number);
+  return Date.UTC(isEnd ? endYear : year, isEnd ? endMonth - 1 : month - 1, isEnd ? endDayOfMonth : day, 0, minutes) - 330 * 60_000;
+}
+
+async function supportsBookingEndDate(db: D1Database): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS present FROM pragma_table_info('bookings') WHERE name = 'end_date' LIMIT 1").first<{ present: number }>();
+  return Boolean(row?.present);
 }
 
 async function overlappingBookings(db: D1Database, roomId: number, startsAt: number, endsAt: number) {
+  const hasEndDate = await supportsBookingEndDate(db);
   const rows = await db.prepare(`
-    SELECT id, booking_ref AS bookingRef, date, start_time AS startTime, end_time AS endTime
+    SELECT id, booking_ref AS bookingRef, date, ${hasEndDate ? "end_date AS endDate," : ""} start_time AS startTime, end_time AS endTime
     FROM bookings WHERE room_id = ? AND status = 'confirmed'
-  `).bind(roomId).all<{ id: number; bookingRef: string; date: string; startTime: string; endTime: string }>();
-  return rows.results.filter((booking) => bookingInstant(booking.date, booking.startTime) < endsAt && bookingInstant(booking.date, booking.endTime, true) > startsAt);
+  `).bind(roomId).all<{ id: number; bookingRef: string; date: string; endDate?: string | null; startTime: string; endTime: string }>();
+  return rows.results.filter((booking) => bookingInstant(booking.date, booking.startTime) < endsAt && bookingInstant(booking.date, booking.endTime, true, booking.endDate) > startsAt);
 }
 
 export async function createRoomClosure(
@@ -206,11 +226,17 @@ export async function cancelRoomClosure(db: D1Database, input: { closureId: numb
   return { id: input.closureId, cancelled: true };
 }
 
-export async function roomIsClosedForWindow(db: D1Database, roomId: number, date: string, startTime: string, endTime: string): Promise<boolean> {
+export async function roomIsClosedForWindow(db: D1Database, roomId: number, date: string, startTime: string, endTime: string, endDate?: string | null): Promise<boolean> {
   const startsAt = bookingInstant(date, startTime);
-  const endsAt = bookingInstant(date, endTime, true);
-  const state = await db.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: RoomReadinessState }>();
+  const endsAt = bookingInstant(date, endTime, true, endDate);
+  const roomColumns = await db.prepare("SELECT name FROM pragma_table_info('rooms')").all<{ name: string }>();
+  const hasReadiness = roomColumns.results.some((column) => column.name === "readiness_state");
+  const state = hasReadiness
+    ? await db.prepare("SELECT readiness_state AS readinessState FROM rooms WHERE id = ? LIMIT 1").bind(roomId).first<{ readinessState: RoomReadinessState }>()
+    : { readinessState: "usable" as const };
   if (!state || state.readinessState === "closed") return true;
+  const hasClosures = Boolean((await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'room_closures' LIMIT 1").first<{ present: number }>())?.present);
+  if (!hasClosures) return false;
   const closures = await db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM room_closures WHERE room_id = ? AND is_active = 1").bind(roomId).all<{ startsAt: string; endsAt: string }>();
   return closures.results.some((closure) => Date.parse(closure.startsAt) < endsAt && Date.parse(closure.endsAt) > startsAt);
 }

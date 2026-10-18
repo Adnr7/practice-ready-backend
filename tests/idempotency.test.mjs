@@ -80,7 +80,7 @@ describe("atomic Idempotency-Key creation through the Worker routes", () => {
       ...[1, 2].map((id) => db.prepare(`INSERT INTO users (id, email, password_hash, salt, full_name, role)
         VALUES (?, ?, 'unused-test-placeholder', 'unused-test-placeholder', 'Fixture', 'student')`)
         .bind(id, `fixture-${id}@example.invalid`)),
-      db.prepare("INSERT INTO rooms (id, name, code, capacity, description) VALUES (1, 'Fixture room', 'fixture-room', 6, 'Test')"),
+      db.prepare("INSERT INTO rooms (id, name, code, capacity, description) VALUES (1, 'MPR 2', 'mpr-2', 6, 'Test')"),
     ]);
   });
   after(async () => { await emulator?.dispose(); });
@@ -94,7 +94,7 @@ describe("atomic Idempotency-Key creation through the Worker routes", () => {
       db.prepare("DELETE FROM attachments"),
       db.prepare("DELETE FROM bookings"),
       db.prepare("DELETE FROM time_slots"),
-      db.prepare("UPDATE rooms SET name = 'Fixture room', is_active = 1, readiness_state = 'usable'"),
+      db.prepare("UPDATE rooms SET name = 'MPR 2', code = 'mpr-2', is_active = 1, readiness_state = 'usable'"),
       db.prepare("UPDATE booking_policies SET maximum_minutes = 180, advance_days = 14"),
     ]);
   });
