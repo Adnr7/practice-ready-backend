@@ -53,7 +53,9 @@ Operational availability no longer substitutes fixture occupancy when either hal
 | `bash -n scripts/remote-repair-and-verify.sh` | Passed |
 | `git diff --check` | Passed |
 | Docker | Tool unavailable; Docker build/run not verified |
-| Remote deployment | Passed: Worker version `79b6597a-68f0-4b62-8f32-d1c0668de1da` at the approved URL; no remote migration was pending |
+| Remote deployment | Passed: Worker version `bfdf9386-73c5-4b3d-b5c8-40ca70808660` at the approved URL; no remote migration was pending |
+
+After the live verification rerun, disposable booking, journal, report, attachment, session, claim and idempotency rows tied to the `omnirush-*` test users were removed. The nine disposable test users remain because no supported account-delete workflow exists.
 
 The built Worker smoke now passes with a 60-second request bound. It uses disposable secrets, temporary isolated databases and no developer `.dev.vars` or live D1 data. This is local evidence only and is not remote deployment evidence.
 
