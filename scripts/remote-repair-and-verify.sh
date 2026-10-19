@@ -55,10 +55,10 @@ require_file "node_modules/wrangler/bin/wrangler.js"
 require_file "dist/server/wrangler.json"
 
 echo "Remote target: ${worker_name} (${production_url})"
-git status --short --branch
-git diff --stat
-git diff --check
-if [[ -n "$(git status --short)" ]]; then
+git -c core.autocrlf=true status --short --branch
+git -c core.autocrlf=true diff --stat
+git -c core.autocrlf=true diff --check
+if [[ -n "$(git -c core.autocrlf=true status --short)" ]]; then
   echo "Refusing remote operations with a dirty checkout; commit or stash reviewed changes first." >&2
   exit 2
 fi
