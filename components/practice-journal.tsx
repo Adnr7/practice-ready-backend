@@ -4,6 +4,7 @@ import { preparePhoto, MAX_PHOTO_BYTES } from "@/lib/photo-upload";
 import { ImagePlus, X } from "lucide-react";
 import type { Reservation } from "@/components/reservations";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { attachmentUrl, fetchBookingJournal, saveBookingJournal, uploadAttachment } from "@/lib/api-client";
 
 type Entry = { note: string; photos: string[]; updatedAt: string };
 const eventName = "practice-ready-open-journal";
@@ -20,13 +21,14 @@ const action = "min-h-11 rounded-xl border border-violet-300 px-4 py-2 font-semi
 export default function PracticeJournal({getReservations}: {getReservations:()=>Reservation[]}) {
  const [session,setSession] = useState<Reservation|null>(null), [prompt,setPrompt] = useState<Reservation|null>(null);
  const [note,setNote] = useState(""), [photos,setPhotos] = useState<string[]>([]), [error,setError] = useState(""), [uploading,setUploading] = useState(false);
- const fileInput=useRef<HTMLInputElement>(null);
- const active = useRef(new Map<string,Reservation>());
+  const fileInput=useRef<HTMLInputElement>(null);
+  const active = useRef(new Map<string,Reservation>());
+  const uploadedPhotos = useRef(new Map<string,number>());
  function edit(r:Reservation) {
   if (r.cancelled || Date.parse(r.end)>Date.now()) return;
   const entry=loadJournal(r.id);setNote(entry?.note || "");setPhotos(entry?.photos || []);setError("");setPrompt(null);setSession(r);
  }
- useEffect(()=>{
+  useEffect(()=>{
   const open=(event:Event)=>edit((event as CustomEvent<Reservation>).detail);
   window.addEventListener(eventName,open);
   function check() {
@@ -38,7 +40,43 @@ export default function PracticeJournal({getReservations}: {getReservations:()=>
   }
   check();const timer=setInterval(check,15000);
   return()=>{clearInterval(timer);window.removeEventListener(eventName,open);};
- },[getReservations]);
+  },[getReservations]);
+  useEffect(()=>{
+   if(!session?.backendId)return;
+   let cancelled=false;
+   void fetchBookingJournal(session.backendId).then(result=>{
+    if(cancelled||!result.success||!result.data.journal)return;
+    setNote(result.data.journal.note);
+    setPhotos(result.data.journal.attachmentIds.map(attachmentUrl));
+   });
+   return()=>{cancelled=true;};
+  },[session?.backendId]);
+  useEffect(()=>{
+   if(!session?.backendId||(!note.trim()&&!photos.length))return;
+   const backendId=session.backendId;
+   let cancelled=false;
+   const timer=window.setTimeout(async()=>{
+    const attachmentIds:number[]=[];
+    for(const photo of photos){
+     const existing=photo.match(/^\/api\/attachments\/(\d+)$/)?.[1];
+     if(existing){attachmentIds.push(Number(existing));continue;}
+     const cached=uploadedPhotos.current.get(photo);
+     if(cached){attachmentIds.push(cached);continue;}
+     const comma=photo.indexOf(",");
+     const header=comma>0?photo.slice(0,comma):"";
+     const mediaType=header.match(/^data:([^;]+);base64$/)?.[1]||"image/png";
+     const result=await uploadAttachment({fileName:`practice-${Date.now()}.png`,mediaType,dataUrl:photo});
+     if(!result.success){setError(result.error||"Could not save the practice photo.");return;}
+     if(!result.data.attachment){setError("Could not save the practice photo.");return;}
+     uploadedPhotos.current.set(photo,result.data.attachment.id);attachmentIds.push(result.data.attachment.id);
+    }
+    if(cancelled)return;
+    const saved=await saveBookingJournal(backendId,{note:note.trim(),attachmentIds});
+    if(saved.success&&saved.data.journal){const nextPhotos=saved.data.journal.attachmentIds.map(attachmentUrl);if(nextPhotos.join("|")!==photos.join("|"))setPhotos(nextPhotos);}
+    else if(!saved.success)setError(saved.error);
+   },700);
+   return()=>{cancelled=true;window.clearTimeout(timer);};
+  },[session?.backendId,note,photos]);
  async function addPhotos(files:FileList|null) {
   if(!files?.length)return;setError("");
   if(photos.length+files.length>3){setError("You can add up to 3 photos.");return;}

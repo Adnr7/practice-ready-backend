@@ -5,6 +5,7 @@ import { LoginAtmosphere, LoginEqualizer } from "@/components/login-atmosphere";
 import { Eye, EyeOff, LogOut, UserRound, Music2, Check } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { login as apiLogin, logout as apiLogout, me, register as apiRegister, updateCurrentUser, type UserProfile } from "@/lib/api-client";
 
 import {ftsTeam} from "@/components/fts-admin";
 const sample = { name: "Asmi Battoo", phone: "", email: "asmi@example.com" };
@@ -18,6 +19,15 @@ const field = "mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3
 const primary = "w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500";
 
 type Profile = typeof sample;
+const profileFromApi = (user: UserProfile): Profile => ({ name: user.fullName, phone: user.phone ?? "", email: user.email });
+const adminFromApi = (user: UserProfile) => ({ name: user.fullName, email: user.email, phone: user.phone ?? "" });
+function cacheBackendIdentity(user: UserProfile) {
+  try {
+    localStorage.setItem(key, JSON.stringify(profileFromApi(user)));
+    localStorage.setItem(credentialKey, JSON.stringify({ salt: `server-user-${user.id}`, digest: "" }));
+    sessionStorage.setItem(sessionKey, "signed-in");
+  } catch { /* Browser storage is only a compatibility cache for legacy UI helpers. */ }
+}
 const AccountControlsContext = createContext<ReactNode>(null);
 export function AccountControls() { return <div className="shrink-0 max-[379px]:[&_button]:h-10 max-[379px]:[&_button]:w-10">{useContext(AccountControlsContext)}</div>; }
 
@@ -65,31 +75,42 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(key) || "null");
-      if (stored && typeof stored.name === "string") setProfile({ ...sample, name: stored.name, phone: typeof stored.phone === "string" ? stored.phone : "", email: typeof stored.email === "string" ? stored.email : sample.email });
-      const auth = JSON.parse(localStorage.getItem(credentialKey) || "null");
-      if (auth && typeof auth.salt === "string" && typeof auth.digest === "string") setCredential(auth);
-      const fts=ftsTeam.find(t=>t.email===sessionStorage.getItem("practice-ready-fts-session-v1"));if(fts)setAdmin(fts);
-      if (sessionStorage.getItem(sessionKey) === "sample") setProfile(sample);
-      setSignedIn(["signed-in", "sample"].includes(sessionStorage.getItem(sessionKey) || ""));
-    } catch { /* Storage is optional for the sample flow. */ }
-    setReady(true);
+    let cancelled = false;
+    void me().then((user) => {
+      if (cancelled) return;
+      if (user) {
+        cacheBackendIdentity(user);
+        setProfile(profileFromApi(user));
+        setDraft(profileFromApi(user));
+        if (user.role === "student") setSignedIn(true);
+        else setAdmin(adminFromApi(user));
+      }
+      setReady(true);
+    });
+    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!saved || !signedIn) return;
+    void updateCurrentUser({ fullName: profile.name, phone: profile.phone });
+  }, [profile.name, profile.phone, saved, signedIn]);
 
   async function login(e: React.FormEvent) {
     e.preventDefault(); setError(""); setBusy(true);
     try {
-      const fts=ftsTeam.find(t=>t.email===email.trim().toLowerCase());
-      if(fts){if(pass!=="PracticeReadyFTS123"){setError("Email or password is incorrect.");return;}sessionStorage.setItem("practice-ready-fts-session-v1",fts.email);if(document.activeElement instanceof HTMLElement)document.activeElement.blur();window.scrollTo({top:0,left:0,behavior:"instant"});setEnteringAdmin(fts);setPass("");return;}
-      if (email.trim().toLowerCase() === sample.email && pass === password) {
-        sessionStorage.setItem(sessionKey, "sample"); setProfile(sample); setPass(""); setSignedIn(true); return;
+      const result = await apiLogin({ email: email.trim().toLowerCase(), password: pass });
+      if (!result.success || !result.user) { setError(result.error ?? "Email or password is incorrect."); return; }
+      cacheBackendIdentity(result.user);
+      const next = profileFromApi(result.user);
+      setProfile(next); setDraft(next); setPass("");
+      if (result.user.role === "student") {
+        setSignedIn(true);
+      } else {
+        const admin = adminFromApi(result.user);
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        setEnteringAdmin(admin);
       }
-      const storedProfile = JSON.parse(localStorage.getItem(key) || "null");
-      const loginProfile = storedProfile && typeof storedProfile.name === "string" && typeof storedProfile.email === "string" ? {...sample, ...storedProfile} : profile;
-      const correctPassword = credential ? await passwordDigest(pass, credential.salt) === credential.digest : pass === password;
-      if (email.trim().toLowerCase() !== loginProfile.email.toLowerCase() || !correctPassword) {setError("Email or password is incorrect."); return;}
-      sessionStorage.setItem(sessionKey, "signed-in"); setProfile(loginProfile); setPass(""); setSignedIn(true);
     } catch {setError("Could not log in. Please allow browser storage and try again.");}
     finally {setBusy(false);}
   }
@@ -105,16 +126,20 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
     if (registration.password !== registration.confirm) {setError("Passwords do not match.");return;}
     setBusy(true);
     try {
-      const salt = crypto.randomUUID(); const auth = {salt,digest:await passwordDigest(registration.password,salt)};
-      // One local demo account; write credentials before reporting success.
-      localStorage.setItem(credentialKey,JSON.stringify(auth)); localStorage.setItem(key,JSON.stringify(next)); sessionStorage.setItem(sessionKey,"signed-in");
-      setCredential(auth);setProfile(next);setDraft(next);setRegistration({name:"",phone:"",email:"",password:"",confirm:""});setShow(false);setShowConfirm(false);setSignedIn(true);setView("login");
-    } catch {setError("Could not save your demo account. Please allow browser storage and try again.");}
+      const result = await apiRegister({ email: next.email, password: registration.password, fullName: next.name });
+      if (!result.success || !result.user) { setError(result.error ?? "Could not create your account."); return; }
+      cacheBackendIdentity(result.user);
+      const updated = await updateCurrentUser({ fullName: next.name, phone: next.phone });
+      const saved = updated.success && updated.user ? profileFromApi(updated.user) : profileFromApi(result.user);
+      setProfile(saved); setDraft(saved); setRegistration({name:"",phone:"",email:"",password:"",confirm:""}); setShow(false); setShowConfirm(false); setSignedIn(true); setView("login");
+    } catch {setError("Could not create your account. Please try again.");}
     finally {setBusy(false);}
   }
-  function logout() {
+  async function logout() {
+    const result = await apiLogout();
+    if (!result.success) { setError(result.error ?? "Could not sign out."); return; }
     setAdmin(null);
-    try { sessionStorage.removeItem("practice-ready-fts-session-v1");sessionStorage.removeItem(sessionKey); } catch {}
+    try { sessionStorage.removeItem(sessionKey); } catch { /* Optional compatibility cache. */ }
     setPanel(null); setSignedIn(false); setView("login"); setEmail(""); setPass(""); setError(""); onLogout?.();
   }
   const initials = profile.name.trim().split(/\s+/).slice(0, 2).map(n => n[0]).join("").toUpperCase() || "AB";

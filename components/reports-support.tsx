@@ -3,12 +3,25 @@ import ReportSelect from "@/components/report-select";
 import { preparePhoto } from "@/lib/photo-upload";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ClipboardList, ChevronRight, ArrowRight, ImagePlus, X, Check, Headphones, Mail, Phone, TriangleAlert, Wrench } from "lucide-react";
+import { attachmentUrl, createReport, fetchEquipmentInventory, fetchLocations, fetchReports, fetchRooms, uploadAttachment, type ReportData } from "@/lib/api-client";
 const team=[
  {name:"Vivaan Kanvinde",year:"3rd Year",email:"vivaan.kanvinde@vijaybhoomi.edu.in",phone:"+91 96198 92882",tel:"+919619892882"},
  {name:"Leo Dominic Savio Emprayil",year:"2nd Year",email:"emprayil@vijaybhoomi.edu.in",phone:"+91 91751 18092",tel:"+919175118092"},
  {name:"Aniket Sao",year:"2nd Year",email:"aniket.sao@vijaybhoomi.edu.in",phone:"+91 91567 37924",tel:"+919156737924"},
 ];
 type Report={id:string;kind:string;location:string;equipment:string;category:string;message:string;photo?:string;created:string;status?:string;update?:string;reporter?:{name:string;email:string;phone:string}};
+const reportFromApi=(value:ReportData):Report=>({
+ id:value.reference,
+ kind:value.category==="assistance"?"contact":value.category,
+ location:value.locationName||value.roomName||"",
+ equipment:value.equipmentName||String(value.equipmentId||""),
+ category:value.issueType||value.category,
+ message:value.description,
+ photo:value.attachmentIds[0]?attachmentUrl(value.attachmentIds[0]):undefined,
+ created:value.createdAt,
+ status:value.status==="resolved"||value.status==="closed"?"Resolved":value.status==="in_progress"?"In progress":"Open",
+ update:value.updates.at(-1)?.message||undefined,
+});
 const key="practice-ready-support-v1";
 const card="rounded-3xl border border-violet-200 bg-white p-5 dark:border-[#30384D] dark:bg-[#1B2133]";
 const field="mt-2 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 focus:outline-none focus:ring-2 focus:ring-violet-500 dark:border-slate-600 dark:bg-[#171D2D] dark:text-white";
@@ -16,6 +29,8 @@ const action="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl 
 export default function ReportsSupport({equipment,locations,view,setView}:{view:string;setView:(view:string)=>void;equipment:{id:string;displayId?:string;name:string;currentLocation:string}[];locations:string[]}) {
  const [location,setLocation]=useState(""),[item,setItem]=useState(""),[category,setCategory]=useState(""),[message,setMessage]=useState(""),[photo,setPhoto]=useState<string>(),[photoBusy,setPhotoBusy]=useState(false),[error,setError]=useState(""),[reports,setReports]=useState<Report[]>([]),[saved,setSaved]=useState<Report|null>(null);
  useEffect(()=>{try{const data=JSON.parse(localStorage.getItem(key)||"[]");if(Array.isArray(data))setReports(data.filter(r=>typeof r.id==="string"&&typeof r.kind==="string"&&typeof r.message==="string"));}catch{}},[]);
+ useEffect(()=>{let cancelled=false;void fetchReports().then(data=>{if(!cancelled&&data)setReports(data.map(reportFromApi));});return()=>{cancelled=true;};},[]);
+ useEffect(()=>{if(!saved)return;let cancelled=false;void (async()=>{const [equipmentData,roomsData,locationsData]=await Promise.all([fetchEquipmentInventory(),fetchRooms(),fetchLocations()]);if(cancelled)return;const categoryValue=(saved.kind==="equipment"?"equipment":saved.kind==="room"?"room":"assistance") as "equipment"|"room"|"assistance";const equipmentItem=equipmentData?.find(item=>item.equipmentId===saved.equipment||item.name===saved.equipment);const room=roomsData?.find(item=>item.name===saved.location);const locationItem=locationsData?.success?locationsData.data.locations.find(item=>item.name===saved.location):undefined;let attachmentIds:number[]=[];if(saved.photo){const comma=saved.photo.indexOf(","),header=comma>0?saved.photo.slice(0,comma):"",mediaType=header.match(/^data:([^;]+);base64$/)?.[1]||"image/png";const upload=await uploadAttachment({fileName:`report-${saved.id}.png`,mediaType,dataUrl:saved.photo});if(upload.success&&upload.data.attachment)attachmentIds=[upload.data.attachment.id];}const result=await createReport({category:categoryValue,equipmentId:equipmentItem?.id,roomId:room?.id,locationId:locationItem?.id,issueType:saved.category,description:saved.message,attachmentIds},`report-${saved.id}`);const report=result.success?result.report:undefined;if(!cancelled&&report)setReports(current=>[reportFromApi(report),...current.filter(item=>item.id!==report.reference)]);})();return()=>{cancelled=true;};},[saved?.id]);
  useLayoutEffect(()=>{
   if(!saved)return;
   let stopped=false;

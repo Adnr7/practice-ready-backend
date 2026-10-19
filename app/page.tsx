@@ -40,6 +40,8 @@ import SampleAccount, { AccountControls } from "@/components/sample-account";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { fetchReservation, fetchRooms, rescheduleReservation, submitBooking } from "@/lib/api-client";
+import { cacheReservations, readCachedEquipment, readCachedLocations, refreshBackendCatalog, refreshBackendReservations, reservationFromApi } from "@/lib/asmi-backend-adapter";
 
 
 const PRACTICE_READY_MUSIC_SRC = "/practice-ready-smooth-jazz.mp3";
@@ -2861,12 +2863,23 @@ function BookingApp() {
   useEffect(()=>{if(screen!=="support")setSupportView("home");},[screen]);
   const [history, setHistory] = useState<Screen[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [backendEquipment, setBackendEquipment] = useState<Equipment[] | null>(() => readCachedEquipment<Equipment>());
+  const [backendLocations, setBackendLocations] = useState<string[] | null>(() => readCachedLocations());
   const [rescheduleId, setRescheduleId] = useState<string | null>(null);
   const [reservationDetail, setReservationDetail] = useState<string>();
   const [directoryReservation,setDirectoryReservation]=useState<string>();
   const [bookingError, setBookingError] = useState("");
   const [reservationSaved, setReservationSaved] = useState(false);
-  useEffect(() => { setReservations(loadReservations()); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => setReservations(loadReservations());
+    setReservations(loadReservations());
+    void refreshBackendReservations().then((items) => {
+      if (!cancelled && items) setReservations(items);
+    });
+    window.addEventListener("practice-ready-backend-reservations", refresh);
+    return () => { cancelled = true; window.removeEventListener("practice-ready-backend-reservations", refresh); };
+  }, []);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() =>
     startOfMonth(new Date()),
@@ -2877,13 +2890,24 @@ function BookingApp() {
   const [bookingMoveIds, setBookingMoveIds] = useState<string[]>([]);
   useEffect(() => { setRelocations(loadRelocations());const refresh=()=>setRelocations(loadRelocations());const timer=setInterval(refresh,15000);window.addEventListener("storage",refresh);return()=>{clearInterval(timer);window.removeEventListener("storage",refresh);}; }, []);
   const [adminEquipment,setAdminEquipment]=useState<Record<string,Partial<Equipment>>>({});
+  useEffect(() => {
+    let cancelled = false;
+    void refreshBackendCatalog().then((catalog) => {
+      if (cancelled) return;
+      if (catalog.equipment) setBackendEquipment(catalog.equipment as Equipment[]);
+      if (catalog.locations) setBackendLocations(catalog.locations);
+    });
+    return () => { cancelled = true; };
+  }, []);
   useEffect(()=>{try{setAdminEquipment(JSON.parse(localStorage.getItem(ADMIN_EQUIPMENT_KEY)||"{}"));}catch{}},[]);
-  const allEquipment = useMemo(() => [...originalDirectoryEquipment,...Object.entries(adminEquipment).filter(([id,value])=>value.custom&&!originalDirectoryEquipment.some(i=>i.id===id)).map(([id,value])=>({...value,id} as Equipment))].map(base => {
+  const catalogEquipment = backendEquipment ?? originalDirectoryEquipment;
+  const allEquipment = useMemo(() => [...catalogEquipment,...Object.entries(adminEquipment).filter(([id,value])=>value.custom&&!catalogEquipment.some(i=>i.id===id)).map(([id,value])=>({...value,id} as Equipment))].map(base => {
     const item={...base,...adminEquipment[base.id]};
     const move = [...relocations].reverse().find(r => r.equipmentId === item.id);
     return move ? {...item, currentLocation:move.to, relocation:move.expectedReturn ? move : undefined, status:(item.status === "away" ? "ready" : item.status) as Equipment["status"]} : item;
-  }), [relocations,adminEquipment]);
+  }), [relocations,adminEquipment,catalogEquipment]);
   const directoryEquipment=allEquipment.filter(item=>!item.archived);
+  const liveLocations = backendLocations ?? locations;
   const equipmentForRoom = (target:string) => directoryEquipment.filter(x => x.defaultLocation === target).map(x => ({...x,status:(x.currentLocation !== target && (x.status === "ready" || x.status === "away") ? "away" : x.status === "away" && x.currentLocation === target ? "ready" : x.status) as Equipment["status"]}));
   const activeMoveSessions=reservations.filter(r=>canRecordSessionMove(r));
   const openActiveMove=(session:Reservation,editRecord?:Relocation,equipmentId="")=>{
@@ -3094,7 +3118,7 @@ function BookingApp() {
     }
     if (shouldConflict) { setConflictConsumed(true); setConflictSlot(selectedSlots.at(-1) || time); }
     go("recheck");
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       
       const confirmedWindow=selectedBookingWindow(baseDate,selectedSlots.map(t=>allTimeSlots.indexOf(t)));
       if(!confirmedWindow){setBookingError("That time slot has ended. Choose another available slot.");setScreen("review");return;}
@@ -3106,10 +3130,22 @@ function BookingApp() {
         setBookingError("The original reservation can no longer be rescheduled. Return to My Reservations."); setScreen("review"); return;
       }
       const original = current.find(r => r.id === rescheduleId);
-      const reservation: Reservation = { id: original?.id || `PR-${Date.now().toString(36).toUpperCase()}`, room, operationalDate: dateKey(actualStart), slots: [...selectedSlots], time:actualStart.getTime()!==start.getTime()?`${clockLabel(actualStart.getHours()*60+actualStart.getMinutes())}–${clockLabel(end.getHours()*60+end.getMinutes())}`:time, start: actualStart.toISOString(), end: end.toISOString(), cancelled: false, createdAt: original?.createdAt || new Date().toISOString(), moveIds:Array.from(new Set([...(original?.moveIds||[]),...bookingMoveIds])) };
+      const rooms = await fetchRooms();
+      const roomRecord = rooms?.find(item => item.name === room);
+      if (!roomRecord) { setBookingError("That room is no longer available. Return to Room availability and try again."); setScreen("review"); return; }
+      const apiStart = `${String(actualStart.getHours()).padStart(2, "0")}:${String(actualStart.getMinutes()).padStart(2, "0")}`;
+      const apiEnd = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+      const apiPayload = { roomId: roomRecord.id, date: dateKey(actualStart), endDate: dateKey(end), startTime: apiStart, endTime: apiEnd };
+      const mutation = original?.backendId
+        ? await rescheduleReservation(original.backendId, { ...apiPayload, version: original.version ?? 1, reason: "Student rescheduled reservation" })
+        : await submitBooking(apiPayload, `booking-${dateKey(actualStart)}-${roomRecord.id}-${apiStart}-${apiEnd}`);
+      if (!mutation.success) { setBookingError(mutation.error ?? "Could not confirm the reservation. Please try again."); setScreen("review"); return; }
+      const fresh = mutation.booking?.id ? await fetchReservation(mutation.booking.id) : null;
+      const reservation: Reservation = fresh
+        ? reservationFromApi(fresh)
+        : { id: original?.id || mutation.booking?.bookingRef || `PR-${Date.now().toString(36).toUpperCase()}`, backendId: mutation.booking?.id, version: 1, roomId: roomRecord.id, room, operationalDate: dateKey(actualStart), slots: [...selectedSlots], time:actualStart.getTime()!==start.getTime()?`${clockLabel(actualStart.getHours()*60+actualStart.getMinutes())}–${clockLabel(end.getHours()*60+end.getMinutes())}`:time, start: actualStart.toISOString(), end: end.toISOString(), cancelled: false, createdAt: original?.createdAt || new Date().toISOString(), moveIds:Array.from(new Set([...(original?.moveIds||[]),...bookingMoveIds])) };
       const updated = rescheduleId ? current.map(r => r.id === rescheduleId ? reservation : r) : [...current, reservation];
-      try { storeReservations(updated); setReservations(updated); setReservationDetail(reservation.id); setReservationSaved(true); setScreen("success"); }
-      catch { setBookingError("Could not save your reservation on this device. Please try again. Your existing reservation has not changed."); setScreen("review"); }
+      cacheReservations(updated); setReservations(updated); setReservationDetail(reservation.id); setReservationSaved(true); setScreen("success");
     }, 1800);
   };
   const bookingMovePriority=(a:Equipment,b:Equipment)=>{
@@ -3424,7 +3460,7 @@ function BookingApp() {
     {reservationPanel}
   </Shell>;
 
-  if (screen === "support") return <Shell fitVisibleViewport={supportView==="home"} stickyHeader={supportView!=="home"} title={supportView==="reports"?"My reports":supportView==="report-detail"?"Report details":"Reports & Support"} back={()=>supportView==="home"?back():setSupportView(supportView==="report-detail"?"reports":"home")} home={home}><ReportsSupport view={supportView} setView={setSupportView} equipment={allEquipment} locations={locations}/></Shell>;
+  if (screen === "support") return <Shell fitVisibleViewport={supportView==="home"} stickyHeader={supportView!=="home"} title={supportView==="reports"?"My reports":supportView==="report-detail"?"Report details":"Reports & Support"} back={()=>supportView==="home"?back():setSupportView(supportView==="report-detail"?"reports":"home")} home={home}><ReportsSupport view={supportView} setView={setSupportView} equipment={allEquipment} locations={liveLocations}/></Shell>;
   if (screen === "date") {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -4696,7 +4732,7 @@ function BookingApp() {
         headerExtra={directoryReservation?<div className="sm:relative"><div className="sm:pr-52"><p className="min-w-0 text-sm text-slate-600 dark:text-slate-300">Linked to {reservations.find(r=>r.id===directoryReservation)?.room} · {compactTimeRange(reservations.find(r=>r.id===directoryReservation)?.time||"")}</p><div className="hidden sm:absolute sm:right-0 sm:top-0 sm:-translate-y-3 sm:block"><button type="button" className="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-semibold text-violet-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 dark:text-violet-200" onClick={()=>go("directory-moves")}>My equipment moves <ArrowRight size={16} aria-hidden="true"/></button></div></div>{!linkedMoveEligible&&<p className="mt-2 text-sm text-violet-700 dark:text-violet-200">Record a move becomes available 30 minutes before your session starts.</p>}</div>:undefined}
       >
         <div className="grid grid-cols-2 gap-3">
-          {locations.map((l) => (
+          {liveLocations.map((l) => (
             <button
               key={l}
               onClick={() => {
@@ -4907,7 +4943,7 @@ function BookingApp() {
   }
   return null;
   };
-  return <><div className="contents" inert={!!relocationForm} aria-hidden={relocationForm ? true : undefined}>{renderScreen()}</div>{relocationForm && (<EquipmentRelocation items={directoryEquipment.filter(x=>(x.status === "ready" || x.status === "away") && (!x.relocation || (isMoveOwner(x.relocation) && x.id===relocationForm.id)))} locations={locations} initialId={relocationForm.id} initialDestination={relocationForm.destination} initialReturn={relocationForm.due} editRecord={relocationForm.editRecord} activeSessions={relocationForm.fixedSession || (!relocationForm.linkToBooking && (screen.startsWith("directory") || alternativeFromDirectory)) ? activeMoveSessions : []} initialSessionId={relocationForm.sessionId} fixedSession={relocationForm.fixedSession} maxReturn={relocationForm.linkToBooking ? new Date(relocationForm.due).toISOString() : undefined} onClose={()=>setRelocationForm(null)} onSave={record=>{if(relocationForm.linkToBooking&&record.expectedReturn&&!canMoveForBooking)throw new Error("Equipment moves are available within 30 minutes of your booking starting.");const existing=loadRelocations();const latest=[...existing].reverse().find(x=>x.equipmentId===record.equipmentId);const equipment=originalDirectoryEquipment.find(x=>x.id===record.equipmentId);if(relocationForm.editRecord){if(latest?.id!==record.id||!isMoveOwner(latest))throw new Error("This move can no longer be edited.");}else if(latest && latest.expectedReturn && (!isMoveOwner(latest) || record.to!==equipment?.defaultLocation))throw new Error("Equipment is already in use.");
+  return <><div className="contents" inert={!!relocationForm} aria-hidden={relocationForm ? true : undefined}>{renderScreen()}</div>{relocationForm && (<EquipmentRelocation items={directoryEquipment.filter(x=>(x.status === "ready" || x.status === "away") && (!x.relocation || (isMoveOwner(x.relocation) && x.id===relocationForm.id)))} locations={liveLocations} initialId={relocationForm.id} initialDestination={relocationForm.destination} initialReturn={relocationForm.due} editRecord={relocationForm.editRecord} activeSessions={relocationForm.fixedSession || (!relocationForm.linkToBooking && (screen.startsWith("directory") || alternativeFromDirectory)) ? activeMoveSessions : []} initialSessionId={relocationForm.sessionId} fixedSession={relocationForm.fixedSession} maxReturn={relocationForm.linkToBooking ? new Date(relocationForm.due).toISOString() : undefined} onClose={()=>setRelocationForm(null)} onSave={record=>{if(relocationForm.linkToBooking&&record.expectedReturn&&!canMoveForBooking)throw new Error("Equipment moves are available within 30 minutes of your booking starting.");const existing=loadRelocations();const latest=[...existing].reverse().find(x=>x.equipmentId===record.equipmentId);const equipment=originalDirectoryEquipment.find(x=>x.id===record.equipmentId);if(relocationForm.editRecord){if(latest?.id!==record.id||!isMoveOwner(latest))throw new Error("This move can no longer be edited.");}else if(latest && latest.expectedReturn && (!isMoveOwner(latest) || record.to!==equipment?.defaultLocation))throw new Error("Equipment is already in use.");
 const linked=record.reservationId?loadReservations().find(r=>r.id===record.reservationId):undefined;
 if(record.reservationId&&(!linked||linked.cancelled||!canRecordSessionMove(linked)||Date.parse(linked.end)<=Date.now()||Date.parse(record.expectedReturn)>Date.parse(linked.end)))throw new Error("Equipment moves are allowed only within 30 minutes before the session or during it, and must be returned by its end.");
 const updated=relocationForm.editRecord?existing.map(x=>x.id===record.id?{...x,note:record.note,expectedReturn:record.expectedReturn}:x):[...existing,record];

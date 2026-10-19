@@ -6,13 +6,15 @@ import AdminDateFilter from "@/components/admin-date-filter";
 import AdminSelect from "@/components/admin-select";
 import {dateKey,loadReservations,type Reservation} from "@/components/reservations";
 import {slotWindow,slotBookable,bookingDateAvailable,bookingWindowMessage} from "@/lib/slot-availability";
+import {fetchAvailability,fetchRooms} from "@/lib/api-client";
 const ROW_HEIGHT=64;
 const rooms=["MPR 2","MPR 3","MPR 4","MPR 5","MP Lab 2","Live Room","Studio"];
 const clock=(minutes:number)=>new Date(2000,0,1,0,minutes).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
 const dateLabel=(d:Date)=>d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
 const control="min-h-11 rounded-xl border border-violet-200 bg-white px-3 text-sm font-semibold text-violet-700 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:!bg-transparent hover:!bg-violet-50 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200 dark:hover:!bg-[#211A38]";
 export default function RoomAvailabilityCalendar({demoBooked,onSelect,onHome,ftsRecords,onReservation,searchQuery="",reservationName,reservationMatches,searchControl}:{searchControl?:ReactNode;searchQuery?:string;reservationName?:(reservation:Reservation)=>string;reservationMatches?:(reservation:Reservation)=>boolean;onHome?:()=>void;demoBooked:Record<string,number[]>;onSelect?:(room:string,date:Date,index:number)=>void;ftsRecords?:Reservation[];onReservation?:(reservation:Reservation)=>void}){
- const [date,setDate]=useState(()=>new Date()),[room,setRoom]=useState(rooms[0]),[records,setRecords]=useState<Reservation[]>([]),[now,setNow]=useState(Date.now());
+  const [date,setDate]=useState(()=>new Date()),[room,setRoom]=useState(rooms[0]),[records,setRecords]=useState<Reservation[]>([]),[now,setNow]=useState(Date.now());
+  const [,refreshBackendAvailability]=useState(0);
  const scroll=useRef<HTMLDivElement>(null),gridHeader=useRef<HTMLDivElement>(null);
  const [expanded,setExpanded]=useState(false);
  const calendarRoot=useRef<HTMLDivElement>(null),expandButton=useRef<HTMLButtonElement>(null);
@@ -46,7 +48,8 @@ export default function RoomAvailabilityCalendar({demoBooked,onSelect,onHome,fts
   window.addEventListener("resize",fit);window.visualViewport?.addEventListener("resize",fit);
   return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener("resize",fit);window.visualViewport?.removeEventListener("resize",fit);};
  },[!!ftsRecords,expanded]);
- useEffect(()=>{const refresh=()=>{setRecords(loadReservations());setNow(Date.now());};refresh();const timer=setInterval(refresh,15000);window.addEventListener("storage",refresh);return()=>{clearInterval(timer);window.removeEventListener("storage",refresh);};},[]);
+  useEffect(()=>{const refresh=()=>{setRecords(loadReservations());setNow(Date.now());};refresh();const timer=setInterval(refresh,15000);window.addEventListener("storage",refresh);window.addEventListener("practice-ready-backend-reservations",refresh);return()=>{clearInterval(timer);window.removeEventListener("storage",refresh);window.removeEventListener("practice-ready-backend-reservations",refresh);};},[]);
+  useEffect(()=>{let cancelled=false;const load=async()=>{const catalog=await fetchRooms();if(!catalog||cancelled)return;const next:Record<string,number[]>={};for(const item of catalog){const availability=await fetchAvailability(item.id,dateKey(date));if(cancelled)return;next[item.name]=(availability?.slots??[]).filter(slot=>slot.status==="booked").map(slot=>{const [hours,minutes]=slot.startTime.split(":").map(Number);return hours*2+(minutes===30?1:0);});}Object.keys(demoBooked).forEach(key=>{delete demoBooked[key];});Object.assign(demoBooked,next);if(!cancelled)refreshBackendAvailability(value=>value+1);};void load();return()=>{cancelled=true;};},[date]);
  useEffect(()=>{
   if(ftsRecords||timetableHeight===undefined||openedDate.current===date)return;
   const frame=requestAnimationFrame(()=>{const timetable=scroll.current;if(!timetable)return;const at=new Date();const currentSlot=Math.floor((at.getHours()*60+at.getMinutes())/30);timetable.scrollTop=dateKey(date)===dateKey(at)?Math.max(0,currentSlot-1)*ROW_HEIGHT:0;setScrollTop(timetable.scrollTop);openedDate.current=date;});

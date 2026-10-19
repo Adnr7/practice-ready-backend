@@ -9,8 +9,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 
 import EquipmentMoves, { sampleEquipmentMoves } from "@/components/equipment-moves";
 import type { Relocation, MovableEquipment } from "@/components/equipment-relocation";
+import { cancelReservation, endReservationSession } from "@/lib/api-client";
+import { refreshBackendReservations } from "@/lib/asmi-backend-adapter";
 
-export type Reservation = { cancelledBy?:string; cancellationActorRole?:"fts"; cancelReason?:string; cancelledAt?:string; endedEarly?:{by?:string;actorRole?:"fts";reason?:string;at:string;originalEnd:string;originalTime:string;originalSlots:string[];blockedUntil:string}; ftsReschedule?: {reason:string;by:string;at:string;previousRoom:string;previousStart:string;previousEnd:string;movesNeedReview:boolean}; moveIds?: string[]; id: string; room: string; operationalDate: string; slots: string[]; time: string; start: string; end: string; cancelled: boolean; createdAt: string; sample?: boolean };
+export type Reservation = { backendId?:number; version?:number; roomId?:number; cancelledBy?:string; cancellationActorRole?:"fts"; cancelReason?:string; cancelledAt?:string; endedEarly?:{by?:string;actorRole?:"fts";reason?:string;at:string;originalEnd:string;originalTime:string;originalSlots:string[];blockedUntil:string}; ftsReschedule?: {reason:string;by:string;at:string;previousRoom:string;previousStart:string;previousEnd:string;movesNeedReview:boolean}; moveIds?: string[]; id: string; room: string; operationalDate: string; slots: string[]; time: string; start: string; end: string; cancelled: boolean; createdAt: string; sample?: boolean };
 const key = "practice-ready-reservations-v1";
 export function dateKey(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 export function reservationGroup(r: Reservation, now = Date.now()) { return r.cancelled || Date.parse(r.end)<=now ? "History" : Date.parse(r.start)<=now ? "Active" : "Upcoming"; }
@@ -26,7 +28,16 @@ export function sampleReservations(now = Date.now()): Reservation[] {
  const past = (days: number) => { const d = new Date(now); d.setDate(d.getDate() - days); d.setHours(16, 0, 0, 0); return d; };
  return [make("SAMPLE-COMPLETED", "MPR 5", past(1)), make("SAMPLE-CANCELLED", "MPR 2", past(3), true)];
 }
-export function storeReservations(value: Reservation[]) { localStorage.setItem(key,JSON.stringify(value)); }
+export function storeReservations(value: Reservation[]) {
+ const previous=loadReservations();
+ localStorage.setItem(key,JSON.stringify(value));
+ for(const next of value){
+  const before=previous.find(item=>item.id===next.id);
+  if(!next.backendId||!before)continue;
+  if(next.cancelled&&!before.cancelled)void cancelReservation(next.backendId,before.version).then(()=>refreshBackendReservations());
+  if(next.endedEarly&&!before.endedEarly)void endReservationSession(next.backendId,before.version).then(()=>refreshBackendReservations());
+ }
+}
 export function reservationBlockedEnd(r:Reservation){return r.end;}
 export function earlyEndRelease(r:Reservation,now=Date.now()){return Math.min(Date.parse(r.end),now);}
 export function endActiveReservation(r:Reservation,now=Date.now()):Reservation|null {
@@ -65,7 +76,7 @@ export function ReservationTime({time,start,end}:{time:string;start?:string|Date
  return <>{mixed?<><span className="block whitespace-nowrap">{mixed[1]}–</span><span className="block whitespace-nowrap">{mixed[2]}</span></>:<span className="whitespace-nowrap">{formatted}</span>}{crosses&&<span className="mt-1 block whitespace-normal text-xs font-normal text-slate-500 dark:text-slate-400">Ends {last.toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</span>}</>;
 }
 export function ReservationSummary({reservation,showRoom=true,compact=false}:{reservation:Reservation;showRoom?:boolean;compact?:boolean}) {return <dl className={`${compact?"mt-1":"mt-4"} grid grid-cols-[minmax(0,1fr)_auto] gap-4 text-sm ${showRoom?"sm:grid-cols-3":"sm:grid-cols-2"}`} >{showRoom&&<div className="min-w-0 col-span-2 sm:col-span-1"><dt className="flex items-center gap-1 text-slate-500 dark:text-slate-400"><MapPin size={16}/>Room</dt><dd className="mt-1 break-words text-base font-semibold">{reservation.room}</dd></div>}<div className="min-w-0"><dt className="flex items-center gap-1 text-slate-500 dark:text-slate-400"><CalendarDays size={16}/>Date</dt><dd className="mt-1 break-words text-base font-semibold">{new Date(reservation.start).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short",year:"numeric"})}</dd></div><div className="min-w-0"><dt className="flex items-center gap-1 text-slate-500 dark:text-slate-400"><Clock3 size={16}/>Time</dt><dd className="mt-1 text-base font-semibold"><ReservationTime time={reservation.time} start={reservation.start} end={reservation.end}/></dd></div></dl>;}
-export default function Reservations({items: savedItems,onCancel,onEndSession,onReschedule,onBook,initialId,dialogOnly=false,onDetailClose,moves=[],equipment=[],onRecordReturn,onAddMove,onEditMove}:{onAddMove?:(reservation:Reservation)=>void;onEditMove?:(record:Relocation,reservation:Reservation)=>void;moves?:Relocation[];equipment?:MovableEquipment[];onRecordReturn?:(item:MovableEquipment)=>void;items:Reservation[];onCancel:(id:string)=>boolean;onEndSession:(id:string)=>boolean;onReschedule:(r:Reservation)=>void;onBook:()=>void;initialId?:string;dialogOnly?:boolean;onDetailClose?:()=>void}) {
+export default function Reservations({items: savedItems,onCancel,onEndSession,onReschedule,onBook,initialId,dialogOnly=false,onDetailClose,moves=[],equipment=[],onRecordReturn,onAddMove,onEditMove}:{onAddMove?:(reservation:Reservation)=>void;onEditMove?:(record:Relocation,reservation:Reservation)=>void;moves?:Relocation[];equipment?:MovableEquipment[];onRecordReturn?:(item:MovableEquipment)=>void;items:Reservation[];onCancel:(id:string)=>boolean|Promise<boolean>;onEndSession:(id:string)=>boolean|Promise<boolean>;onReschedule:(r:Reservation)=>void;onBook:()=>void;initialId?:string;dialogOnly?:boolean;onDetailClose?:()=>void}) {
  const [tab,setTab]=useState(()=>{const target=savedItems.find(r=>r.id===initialId);return target?reservationGroup(target):"Upcoming";}),[detail,setDetail]=useState<string|null>(initialId||null),[confirm,setConfirm]=useState(false),[endConfirm,setEndConfirm]=useState(false),[notice,setNotice]=useState(""),[now,setNow]=useState(Date.now());
  useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(timer);},[]);
  const [,refreshJournal]=useState(0);
