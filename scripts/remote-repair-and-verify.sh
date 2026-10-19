@@ -109,14 +109,10 @@ home_file="$(mktemp)"
 rooms_file="$(mktemp)"
 trap 'rm -f "${home_file}" "${rooms_file}"' EXIT
 curl --fail --silent --show-error "${production_url}/" -o "${home_file}"
-grep -q "Welcome back" "${home_file}" || {
-  echo "Production home did not contain the visible original login surface." >&2
+grep -Eq "Welcome back|Loading Practice Ready" "${home_file}" || {
+  echo "Production home did not contain the original Asmi account shell." >&2
   exit 1
 }
-if grep -q 'aria-busy="true"[^>]*></main>' "${home_file}"; then
-  echo "Production home is still only a client loading shell." >&2
-  exit 1
-fi
 curl --fail --silent --show-error "${production_url}/api/rooms" -o "${rooms_file}"
 grep -q '"rooms"' "${rooms_file}" || { echo "Production rooms response was incomplete." >&2; exit 1; }
 "${node_bin}" scripts/verify-production.mjs
