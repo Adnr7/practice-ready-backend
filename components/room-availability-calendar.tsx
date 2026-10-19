@@ -1,95 +1,88 @@
 "use client";
+import {useEffect,useLayoutEffect,useRef,useState,type ReactNode} from "react";
+import {Maximize2,Minimize2} from "lucide-react";
+import {calendarViewRange,clampCalendarDate} from "@/lib/calendar-view-range";
+import AdminDateFilter from "@/components/admin-date-filter";
+import AdminSelect from "@/components/admin-select";
+import {dateKey,loadReservations,type Reservation} from "@/components/reservations";
+import {slotWindow,slotBookable,bookingDateAvailable,bookingWindowMessage} from "@/lib/slot-availability";
+const ROW_HEIGHT=64;
+const rooms=["MPR 2","MPR 3","MPR 4","MPR 5","MP Lab 2","Live Room","Studio"];
+const clock=(minutes:number)=>new Date(2000,0,1,0,minutes).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+const dateLabel=(d:Date)=>d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+const control="min-h-11 rounded-xl border border-violet-200 bg-white px-3 text-sm font-semibold text-violet-700 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:!bg-transparent hover:!bg-violet-50 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200 dark:hover:!bg-[#211A38]";
+export default function RoomAvailabilityCalendar({demoBooked,onSelect,onHome,ftsRecords,onReservation,searchQuery="",reservationName,reservationMatches,searchControl}:{searchControl?:ReactNode;searchQuery?:string;reservationName?:(reservation:Reservation)=>string;reservationMatches?:(reservation:Reservation)=>boolean;onHome?:()=>void;demoBooked:Record<string,number[]>;onSelect?:(room:string,date:Date,index:number)=>void;ftsRecords?:Reservation[];onReservation?:(reservation:Reservation)=>void}){
+ const [date,setDate]=useState(()=>new Date()),[room,setRoom]=useState(rooms[0]),[records,setRecords]=useState<Reservation[]>([]),[now,setNow]=useState(Date.now());
+ const scroll=useRef<HTMLDivElement>(null),gridHeader=useRef<HTMLDivElement>(null);
+ const [expanded,setExpanded]=useState(false);
+ const calendarRoot=useRef<HTMLDivElement>(null),expandButton=useRef<HTMLButtonElement>(null);
+ const exitButton=useRef<HTMLButtonElement>(null);
+ const savedScroll=useRef({top:0,left:0});
+ const toggleExpanded=(next:boolean)=>{
+  if(scroll.current)savedScroll.current={top:scroll.current.scrollTop,left:scroll.current.scrollLeft};
+  setExpanded(next);
+ };
+ useLayoutEffect(()=>{
+  if(scroll.current){scroll.current.scrollTop=savedScroll.current.top;scroll.current.scrollLeft=savedScroll.current.left;}
+  if(expanded)exitButton.current?.focus({preventScroll:true});
+ },[expanded]);
+ useEffect(()=>{
+  if(!expanded)return;
+  const old=document.body.style.overflow;document.body.style.overflow="hidden";
+  return()=>{document.body.style.overflow=old;expandButton.current?.focus({preventScroll:true});};
+ },[expanded]);
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
-import { fetchAvailability, fetchReservations, fetchRooms, type AvailabilityResponse, type ReservationData, type RoomData } from "@/lib/api-client";
-import { getInstitutionNow, timeToMinutes } from "@/lib/booking-engine";
-
-const ROW_HEIGHT = 64;
-const ROOM_ORDER = ["MPR 2", "MPR 3", "MPR 4", "MPR 5", "MP Lab 2", "Live Room", "Studio"];
-const control = "min-h-11 rounded-xl border border-violet-200 bg-white px-3 text-sm font-semibold text-violet-700 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:!bg-transparent hover:!bg-violet-50 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200 dark:hover:!bg-[#211A38]";
-const pad = (value: number) => String(value).padStart(2, "0");
-const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const fromKey = (value: string) => { const [year, month, day] = value.split("-").map(Number); return new Date(year, month - 1, day); };
-const addDays = (value: string, amount: number) => { const date = fromKey(value); date.setDate(date.getDate() + amount); return dateKey(date); };
-const dateLabel = (value: string) => fromKey(value).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-const clock = (minutes: number) => new Date(2000, 0, 1, 0, minutes).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-const slotLabel = (index: number) => `${clock(index * 30)}–${clock((index + 1) * 30)}`;
-const epoch = (date: string, time: string, endDate = date, isEnd = false) => { const end = fromKey(endDate); if (isEnd && time === "00:00" && endDate === date) end.setDate(end.getDate() + 1); const [hours, minutes] = time.split(":").map(Number); return Date.UTC(end.getFullYear(), end.getMonth(), end.getDate(), hours, minutes); };
-const bookingBounds = (booking: ReservationData) => ({ start: epoch(booking.date, booking.startTime), end: epoch(booking.date, booking.endTime, booking.endDate ?? booking.date, true) });
-
-type RoomState = { room: RoomData; availability: AvailabilityResponse };
-
-export default function RoomAvailabilityCalendar({ onSelect, onHome, onReservation }: { onSelect?: (room: string, date: Date, index: number) => void; onHome?: () => void; onReservation?: (reservation: ReservationData) => void }) {
-  const initialDate = getInstitutionNow().date;
-  const [date, setDate] = useState(initialDate);
-  const [room, setRoom] = useState(ROOM_ORDER[0]);
-  const [rooms, setRooms] = useState<RoomData[]>([]);
-  const [states, setStates] = useState<RoomState[]>([]);
-  const [reservations, setReservations] = useState<ReservationData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [now, setNow] = useState(() => Date.now());
-  const [expanded, setExpanded] = useState(false);
-  const [scrollTop, setScrollTop] = useState(0);
-  const scroll = useRef<HTMLDivElement>(null);
-  const expandButton = useRef<HTMLButtonElement>(null);
-  const exitButton = useRef<HTMLButtonElement>(null);
-  const savedScroll = useRef({ top: 0, left: 0 });
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => { if (!cancelled) { setLoading(true); setError(""); } });
-    const load = async () => {
-      const [roomList, reservationList] = await Promise.all([fetchRooms(), fetchReservations("all")]);
-      const ordered = ROOM_ORDER.map((name) => roomList?.find((entry) => entry.name === name)).filter((entry): entry is RoomData => Boolean(entry));
-      const loaded = await Promise.all(ordered.map(async (found) => {
-        const availability = await fetchAvailability(found.id, date);
-        return availability ? { room: found, availability } : null;
-      }));
-      if (cancelled) return;
-      const complete = loaded.filter((entry): entry is RoomState => Boolean(entry));
-      if (!roomList || ordered.length !== ROOM_ORDER.length || complete.length !== ROOM_ORDER.length) { setError("Could not load live room availability. Please try again later."); setLoading(false); return; }
-      setRooms(ordered); setStates(complete); setReservations(reservationList ?? []); setRoom((current) => ordered.some((entry) => entry.name === current) ? current : ordered[0].name); setLoading(false);
-    };
-    void load().catch(() => { if (!cancelled) { setError("Could not load live room availability. Please try again later."); setLoading(false); } });
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [date]);
-
-  useLayoutEffect(() => { if (scroll.current) { scroll.current.scrollTop = savedScroll.current.top; scroll.current.scrollLeft = savedScroll.current.left; } if (expanded) exitButton.current?.focus({ preventScroll: true }); }, [expanded]);
-  useEffect(() => { if (!expanded) return; const previous = document.body.style.overflow; const button = expandButton.current; document.body.style.overflow = "hidden"; return () => { document.body.style.overflow = previous; button?.focus({ preventScroll: true }); }; }, [expanded]);
-
-  const toggleExpanded = (next: boolean) => { if (scroll.current) savedScroll.current = { top: scroll.current.scrollTop, left: scroll.current.scrollLeft }; setExpanded(next); };
-  const move = (amount: number) => setDate((current) => addDays(current, amount));
-  const roomsForDisplay = rooms.length ? rooms : ROOM_ORDER.map((name) => ({ id: 0, name, code: name, capacity: 0, description: "" }));
-  const loadedByRoom = new Map(states.map((entry) => [entry.room.name, entry]));
-  const stateFor = (name: string, index: number) => {
-    const loaded = loadedByRoom.get(name);
-    const slot = loaded?.availability.slots.find((entry) => timeToMinutes(entry.startTime) === index * 30);
-    const own = loaded && reservations.find((booking) => booking.roomId === loaded.room.id && booking.status === "confirmed" && (() => { const bounds = bookingBounds(booking); const start = epoch(date, slot?.startTime ?? `${pad(Math.floor(index / 2))}:${index % 2 ? "30" : "00"}`); const end = start + 30 * 60_000; return bounds.start < end && bounds.end > start; })());
-    if (own) return { kind: "own" as const, label: "Your booking", reservation: own };
-    if (!slot || slot.status !== "available") return { kind: "booked" as const, label: "Booked" };
-    if (slot.passed || epoch(date, slot.endTime, date, true) <= now) return { kind: "past" as const, label: "Elapsed" };
-    return { kind: "free" as const, label: "Available" };
-  };
-  const renderColumn = (name: string) => <div className="relative border-l border-slate-300 dark:border-slate-500" style={{ height: 48 * ROW_HEIGHT }}>{Array.from({ length: 48 }, (_, index) => {
-    const state = stateFor(name, index);
-    if (state.kind === "booked" || state.kind === "own") {
-      const previous = index > 0 ? stateFor(name, index - 1) : null;
-      if (previous?.kind === state.kind && previous.reservation?.id === state.reservation?.id) return null;
-      let end = index + 1; while (end < 48) { const next = stateFor(name, end); if (next.kind !== state.kind || next.reservation?.id !== state.reservation?.id) break; end += 1; }
-      return <button type="button" key={index} onClick={() => state.reservation && onReservation?.(state.reservation)} disabled={!state.reservation || !onReservation} aria-label={`${name}, ${state.label}, ${slotLabel(index)}`} style={{ top: index * ROW_HEIGHT + 2, height: (end - index) * ROW_HEIGHT - 4 }} className={`absolute inset-x-1 overflow-hidden rounded-lg border !px-2 !py-1 text-left text-xs disabled:!opacity-100 enabled:hover:bg-violet-50 dark:enabled:hover:bg-[#302348] ${state.kind === "own" ? "border-violet-500 bg-violet-200 text-violet-950 dark:border-violet-400 dark:bg-[#4A326E] dark:text-violet-100" : "border-slate-500 bg-slate-200 text-slate-800 dark:border-[#8190AC] dark:bg-[#3B465E] dark:text-slate-100"}`}><div className="absolute inset-x-2" style={{ top: Math.min(Math.max(4, scrollTop - index * ROW_HEIGHT + 4), Math.max(4, (end - index) * ROW_HEIGHT - 52)) }}><p className="truncate font-semibold">{state.label}</p><p className="text-[11px] leading-4">{slotLabel(index)}{end - index > 1 ? ` · ${slotLabel(end - 1).split("–")[1]}` : ""}</p></div></button>;
-    }
-    const eligible = state.kind === "free" && Boolean(onSelect);
-    return <button type="button" key={index} disabled={!eligible} onClick={() => { if (eligible) onSelect?.(name, fromKey(date), index); }} aria-label={`${name}, ${dateLabel(date)}, ${slotLabel(index)}, ${state.label}${eligible ? ", select to book" : ""}`} style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }} className={`absolute inset-x-0 w-full rounded-none border-b border-slate-300 !px-2 text-xs dark:border-slate-500 ${state.kind === "past" ? "practice-calendar-past !border-slate-400 !bg-slate-50 !text-slate-400 dark:!bg-[#171D2D] dark:!text-slate-500" : "!bg-white !text-violet-700 enabled:hover:!bg-violet-50 dark:!bg-[#1B2133] dark:!text-violet-200 dark:enabled:hover:!bg-[#211A38]"}`}>{state.kind !== "past" && <span className="practice-calendar-label relative z-20 bg-white px-1 dark:bg-[#1B2133]">{state.label}</span>}</button>;
-  })}</div>;
-  return <div data-calendar-expanded={expanded ? "true" : undefined} className={expanded ? "fixed inset-0 z-[45] flex h-[100dvh] flex-col overflow-hidden bg-white text-[#151a31] dark:bg-[#1B2133] dark:text-slate-100" : "space-y-3"}>
-    <style>{`.practice-calendar-past{background-image:repeating-linear-gradient(135deg,transparent 0,transparent 8px,rgba(100,116,139,.09) 8px,rgba(100,116,139,.09) 9px)}.dark .practice-calendar-past{background-image:repeating-linear-gradient(135deg,transparent 0,transparent 8px,rgba(148,163,184,.13) 8px,rgba(148,163,184,.13) 9px)}`}</style>
-    {!expanded && <div className="space-y-3"><div className="flex items-center justify-between gap-3"><p className="min-w-0 text-sm text-slate-600 dark:text-slate-300">Select an available half-hour slot.</p>{onHome && <button type="button" onClick={onHome} className="hidden min-h-11 rounded-xl px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 dark:text-violet-300 lg:block">Home</button>}</div><div className="flex flex-wrap items-center gap-2"><button className={control} onClick={() => move(-1)} aria-label="Previous date">‹</button><button className={control} onClick={() => setDate(initialDate)}>Today</button><button className={control} onClick={() => move(1)} aria-label="Next date">›</button><input type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} className={`${control} min-w-[170px]`} aria-label="Choose calendar date" /></div><div className="lg:hidden"><label className="flex items-center gap-3 text-sm font-semibold">Room<select className="mt-1 min-h-11 min-w-0 flex-1 rounded-xl border border-slate-300 bg-white p-3 dark:border-slate-600 dark:bg-[#1B2133]" value={room} onChange={(event) => setRoom(event.target.value)}>{roomsForDisplay.map((entry) => <option key={entry.name}>{entry.name}</option>)}</select></label></div><div className="flex shrink-0 items-end justify-between gap-3"><div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600 dark:text-slate-300"><span className="font-semibold">Legend</span>{[["Available", "border-slate-300 bg-white dark:border-slate-500 dark:bg-[#1B2133]"], ["Booked", "border-slate-500 bg-slate-200 dark:border-[#8190AC] dark:bg-[#3B465E]"], ["Your booking", "border-violet-500 bg-violet-200 dark:border-violet-400 dark:bg-[#4A326E]"], ["Past", "practice-calendar-past border-slate-400 bg-slate-50 dark:border-slate-500 dark:bg-[#171D2D]"]].map(([label, colour]) => <span key={label} className="inline-flex items-center gap-2 whitespace-nowrap"><span className={`h-3.5 w-3.5 rounded-full border ${colour}`} />{label}</span>)}</div><button ref={expandButton} type="button" onClick={() => toggleExpanded(true)} aria-label="Expand calendar to full screen" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200"><Maximize2 size={16} /></button></div></div>}
-    {expanded && <><button ref={exitButton} type="button" onClick={() => toggleExpanded(false)} aria-label="Exit full screen calendar" className="absolute right-2 top-1.5 z-40 grid h-11 w-11 place-items-center rounded-xl border border-violet-200 bg-white text-violet-700 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200"><Minimize2 size={16} /></button><div className="absolute left-4 top-1.5 z-40 text-sm font-semibold">Room availability · {dateLabel(date)}</div></>}
-    {loading && <p role="status" className="rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-800 dark:border-violet-500/30 dark:bg-[#211A38] dark:text-violet-200">Loading live availability…</p>}
-    {error && <p role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-800 dark:bg-[#321820] dark:text-rose-200">{error}</p>}
-    {!loading && !error && <div ref={scroll} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} tabIndex={0} aria-label="Room availability timetable" style={expanded ? { flex: "1 1 0%", minHeight: 0 } : undefined} className={`${expanded ? "h-full rounded-none border-0" : "max-h-[65dvh] rounded-2xl border border-slate-200 dark:border-slate-700"} overflow-auto bg-white dark:bg-[#1B2133]`}><div className="lg:min-w-[1200px]"><div className="sticky top-0 z-30 grid grid-cols-[76px_repeat(7,minmax(0,1fr))] bg-white dark:bg-[#1B2133]"><div className="p-3 text-xs text-slate-500">Time</div>{roomsForDisplay.map((entry) => <div key={entry.name} className={`border-b border-l border-slate-200 p-3 text-center text-xs font-semibold dark:border-slate-700 ${entry.name !== room ? "max-lg:hidden" : ""}`}>{entry.name}</div>)}</div><div className="grid grid-cols-[76px_repeat(7,minmax(0,1fr))]"><div>{Array.from({ length: 48 }, (_, index) => <div key={index} style={{ height: ROW_HEIGHT }} className="border-b border-slate-100 px-2 pt-2 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">{clock(index * 30)}</div>)}</div>{roomsForDisplay.map((entry) => <div key={entry.name} className={entry.name !== room ? "max-lg:hidden" : ""}>{renderColumn(entry.name)}</div>)}</div></div></div>}
-  </div>;
+ const [scrollTop,setScrollTop]=useState(0);
+ const [timetableHeight,setTimetableHeight]=useState<number>();
+ const openedDate=useRef<Date|null>(null);
+ const ftsOpenedDate=useRef<string|undefined>(undefined);
+ useEffect(()=>{
+  if(expanded)return;
+  const timetable=scroll.current;if(!timetable)return;
+  // Measure from the document origin so page scrolling does not resize the grid.
+  const fit=()=>{const documentTop=timetable.getBoundingClientRect().top+window.scrollY;const viewportHeight=window.visualViewport?.height||window.innerHeight;setTimetableHeight(Math.max(window.matchMedia("(max-width: 1023px)").matches&&!ftsRecords?240:160,Math.floor(viewportHeight-documentTop-12)));};
+  const frame=requestAnimationFrame(fit);
+  const observer=new ResizeObserver(fit);if(timetable.parentElement)observer.observe(timetable.parentElement);
+  window.addEventListener("resize",fit);window.visualViewport?.addEventListener("resize",fit);
+  return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener("resize",fit);window.visualViewport?.removeEventListener("resize",fit);};
+ },[!!ftsRecords,expanded]);
+ useEffect(()=>{const refresh=()=>{setRecords(loadReservations());setNow(Date.now());};refresh();const timer=setInterval(refresh,15000);window.addEventListener("storage",refresh);return()=>{clearInterval(timer);window.removeEventListener("storage",refresh);};},[]);
+ useEffect(()=>{
+  if(ftsRecords||timetableHeight===undefined||openedDate.current===date)return;
+  const frame=requestAnimationFrame(()=>{const timetable=scroll.current;if(!timetable)return;const at=new Date();const currentSlot=Math.floor((at.getHours()*60+at.getMinutes())/30);timetable.scrollTop=dateKey(date)===dateKey(at)?Math.max(0,currentSlot-1)*ROW_HEIGHT:0;setScrollTop(timetable.scrollTop);openedDate.current=date;});
+  return()=>cancelAnimationFrame(frame);
+ },[date,timetableHeight]);
+ useEffect(()=>{if(!ftsRecords||ftsOpenedDate.current===dateKey(date))return;const frame=requestAnimationFrame(()=>{const at=new Date();ftsOpenedDate.current=dateKey(date);if(scroll.current)scroll.current.scrollTop=Math.max(0,(dateKey(date)===dateKey(at)?(at.getHours()*60+at.getMinutes())/30-2:bookingDateAvailable(date)?0:12)*ROW_HEIGHT);});return()=>cancelAnimationFrame(frame);},[date,timetableHeight]);
+ useEffect(()=>{if(!ftsRecords)return;const frame=requestAnimationFrame(()=>{const at=new Date();if(window.matchMedia("(max-width: 1023px)").matches&&dateKey(date)===dateKey(at)&&at.getHours()*60+at.getMinutes()>=19*60+30){const target=scroll.current;if(target)window.scrollTo({top:Math.max(0,window.scrollY+target.getBoundingClientRect().top-12),behavior:"instant"});}});return()=>cancelAnimationFrame(frame);},[date,!!ftsRecords]);
+ const viewRange=calendarViewRange(!!ftsRecords,now);
+ const chooseDate=(next:Date)=>setDate(clampCalendarDate(next,viewRange.min,viewRange.max));
+ useEffect(()=>{setDate(current=>{const next=clampCalendarDate(current,viewRange.min,viewRange.max);return next.getTime()===current.getTime()?current:next;});},[dateKey(viewRange.min),viewRange.max?dateKey(viewRange.max):""]);
+ const move=(n:number)=>{const d=new Date(date);d.setDate(d.getDate()+n);chooseDate(d);};
+ const columns=rooms.map(r=>({room:r,date:new Date(date)}));
+ const slotLabel=(i:number)=>`${clock(i*30)}–${clock((i+1)*30)}`;
+ const status=(r:string,d:Date,i:number)=>{const w=slotWindow(d,i);const own=(ftsRecords||records).find(x=>!x.cancelled&&x.room===r&&Date.parse(x.start)<w.end&&Date.parse(x.end)>w.start);if(own)return {kind:ftsRecords?"booked":"own",label:ftsRecords?"Booked":"Your booking",id:own.id,time:own.time,name:ftsRecords?reservationName?.(own)||"Student booking":undefined,matched:!!searchQuery.trim()&&!!reservationMatches?.(own)};if((demoBooked[r]||[]).includes(i))return {kind:"booked",label:"Booked"};return {kind:w.end<=now?"past":"free",label:w.end<=now?"Elapsed":"Available"};};
+ const renderColumn=(r:string,d:Date)=>{const states=Array.from({length:48},(_,i)=>status(r,d,i));return <div className="relative border-l border-slate-300 dark:border-slate-500" style={{height:48*ROW_HEIGHT}}>{states.map((state,i)=>{if(state.kind==="booked"||state.kind==="own"){if(i>0&&states[i-1].kind===state.kind&&states[i-1].id===state.id)return null;let end=i+1;while(end<48&&states[end].kind===state.kind&&states[end].id===state.id)end++;return <button type="button" disabled={!onReservation||!state.id} onClick={()=>{const reservation=ftsRecords?.find(r=>r.id===state.id);if(reservation){if(expanded)toggleExpanded(false);onReservation?.(reservation);}}} key={i} aria-label={`${r}, ${state.label}, ${state.time||`${clock(i*30)}–${clock(end*30)}`}${onReservation?", view reservation details":""}`} title={`${state.label}: ${state.time||`${clock(i*30)}–${clock(end*30)}`}`} style={{top:i*ROW_HEIGHT+2,height:(end-i)*ROW_HEIGHT-4}} className={`practice-calendar-booking absolute inset-x-1 overflow-hidden rounded-lg border !px-2 !py-1 !text-xs text-left disabled:!opacity-100 enabled:hover:!bg-violet-50 enabled:hover:!text-violet-900 dark:enabled:hover:!bg-[#302348] dark:enabled:hover:!text-violet-100 focus-visible:outline-2 focus-visible:outline-violet-500 ${state.matched?"ring-2 ring-violet-500 dark:ring-violet-300":""} ${state.kind==="own"?"border-violet-500 bg-violet-200 text-violet-950 dark:border-violet-400 dark:bg-[#4A326E] dark:text-violet-100":"border-slate-500 bg-slate-200 text-slate-800 dark:border-[#8190AC] dark:bg-[#3B465E] dark:text-slate-100"}`}><div className="absolute inset-x-2 z-20" style={{top:Math.min(Math.max(4,scrollTop-i*ROW_HEIGHT+4),Math.max(4,(end-i)*ROW_HEIGHT-52))}}><p className="truncate font-semibold" title={state.name}><span className={`practice-calendar-label px-1 ${state.kind==="own"?"bg-violet-200 dark:bg-[#4A326E]":"bg-slate-200 dark:bg-[#3B465E]"}`}>{state.name||state.label}</span></p><p className="text-[11px] leading-4"><span className={`practice-calendar-label px-1 ${state.kind==="own"?"bg-violet-200 dark:bg-[#4A326E]":"bg-slate-200 dark:bg-[#3B465E]"}`}>{state.time||`${clock(i*30)}–${clock(end*30)}`}</span></p></div></button>;}const eligible=!!onSelect&&state.kind==="free"&&slotBookable(d,i,now);return <button key={i} type="button" disabled={!eligible} onClick={()=>{if(expanded)toggleExpanded(false);onSelect?.(r,d,i);}} aria-label={`${r}, ${dateLabel(d)}, ${slotLabel(i)}, ${state.label}${eligible?", select to book":""}`} style={{top:i*ROW_HEIGHT,height:ROW_HEIGHT}} className={`practice-calendar-slot absolute inset-x-0 w-full border-b border-slate-300 !rounded-none !px-2 !text-xs dark:border-slate-500 ${state.kind==="past"?"practice-calendar-past !border-slate-400 dark:!border-slate-500 !bg-slate-50 !text-slate-400 dark:!bg-[#171D2D] dark:!text-slate-500":`!bg-white dark:!bg-[#1B2133] ${!ftsRecords&&!eligible?"!text-slate-500 dark:!text-slate-400":"!text-violet-700 enabled:hover:!bg-violet-50 dark:!text-violet-200 dark:enabled:hover:!bg-[#211A38]"}`}`}>{state.kind==="past"?null:<span className="practice-calendar-label relative z-20 bg-white px-1 dark:bg-[#1B2133]">{state.label}</span>}</button>;})}{dateKey(d)===dateKey(new Date(now))&&<div aria-hidden="true" className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-violet-500" style={{top:(new Date(now).getHours()*60+new Date(now).getMinutes())/30*ROW_HEIGHT}}><span className={`absolute -left-1 -top-1 h-2 w-2 rounded-full bg-violet-500 ${r===rooms[0]?"":"lg:hidden"}`}/></div>}</div>;};
+ return <div ref={calendarRoot} data-calendar-expanded={expanded?"true":undefined} role={expanded?"dialog":undefined} aria-modal={expanded?true:undefined} aria-label={expanded?"Room availability full screen":undefined} data-compact-calendar="true" data-fts-calendar={ftsRecords?"true":undefined} className={expanded?"fixed inset-0 z-[45] flex h-[100dvh] flex-col overflow-hidden bg-white text-[#151a31] dark:bg-[#1B2133] dark:text-slate-100":"space-y-3"} onKeyDown={event=>{
+ if(!expanded||!calendarRoot.current?.contains(event.target as Node))return;
+ if(event.key==="Escape"){event.preventDefault();event.stopPropagation();toggleExpanded(false);}
+ if(event.key==="Tab"){
+  const targets=Array.from(calendarRoot.current.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),[tabindex="0"]')).filter(node=>node.getClientRects().length>0);
+  const first=targets[0],last=targets[targets.length-1];
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+ }
+ }}><style>{`@media(max-width:1023px){
+ [data-compact-calendar="true"]:not([data-calendar-expanded="true"])>div:not([hidden])+div{margin-top:8px}
+ [data-compact-calendar="true"] .practice-calendar-controls{display:grid;grid-template-columns:44px auto 44px minmax(0,1fr);gap:6px}
+ [data-compact-calendar="true"] .practice-calendar-controls>button{min-height:44px;padding:0 10px;font-size:13px;white-space:nowrap}
+ [data-compact-calendar="true"] .practice-calendar-controls>button:first-child,[data-compact-calendar="true"] .practice-calendar-controls>button:nth-child(3){padding:0}
+ [data-compact-calendar="true"] .practice-calendar-room label{display:flex;align-items:center;gap:12px}
+ [data-compact-calendar="true"] .practice-calendar-room label>button{margin-top:0;min-width:0;flex:1;padding:10px 12px}
+ [data-compact-calendar="true"] .practice-calendar-legend-title{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+ [data-compact-calendar="true"] .practice-calendar-legend{display:grid;grid-template-columns:max-content max-content;column-gap:20px;row-gap:6px}
+ [data-compact-calendar="true"] .practice-calendar-legend li{gap:6px}
+ [data-fts-calendar="true"] .practice-calendar-legend{grid-template-columns:repeat(3,max-content);column-gap:12px}
+ [data-compact-calendar="true"] .practice-calendar-toolbar{align-items:center}
+ [data-compact-calendar="true"] .practice-calendar-top> * + *{margin-top:8px}
+ }body:has([data-calendar-expanded="true"]) .account-global-controls,body:has([data-calendar-expanded="true"]) .practice-ready-audio-theme-toggle{display:none!important}.practice-calendar-booking:enabled:hover .practice-calendar-label,.practice-calendar-slot:enabled:hover .practice-calendar-label{background-color:#f5f3ff}.dark .practice-calendar-booking:enabled:hover .practice-calendar-label{background-color:#302348}.dark .practice-calendar-slot:enabled:hover .practice-calendar-label{background-color:#211A38}.practice-calendar-past{background-image:repeating-linear-gradient(135deg,transparent 0px,transparent 8px,rgba(100,116,139,.09) 8px,rgba(100,116,139,.09) 9px)}.dark .practice-calendar-past{background-image:repeating-linear-gradient(135deg,transparent 0px,transparent 8px,rgba(148,163,184,.13) 8px,rgba(148,163,184,.13) 9px)}`}</style><div className={expanded?"hidden":"practice-calendar-top space-y-3"}>{!ftsRecords&&<div className="flex items-center justify-between gap-3"><p className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{ftsRecords?"Select a booking to view reservation details.":`Select an available half-hour slot. ${bookingWindowMessage(now)}`}</p>{onHome&&<button type="button" onClick={()=>{if(expanded)toggleExpanded(false);onHome?.();}} className="ml-auto hidden min-h-11 shrink-0 lg:block rounded-xl px-3 py-2 text-sm font-semibold text-violet-700 hover:!bg-violet-50 dark:text-violet-300 dark:hover:!bg-[#211A38]">Home</button>}</div>}<div className={ftsRecords?"grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-end":""}>{searchControl}<div className="practice-calendar-controls flex flex-wrap items-center gap-2"><button className={control} onClick={()=>move(-1)} disabled={dateKey(date)<=dateKey(viewRange.min)} aria-label="Previous date">‹</button><button className={control} onClick={()=>chooseDate(new Date())}>Today</button><button className={control} onClick={()=>move(1)} disabled={!!viewRange.max&&dateKey(date)>=dateKey(viewRange.max)} aria-label="Next date">›</button><AdminDateFilter value={dateKey(date)} onChange={value=>{if(value)chooseDate(new Date(`${value}T00:00:00`));}} allowClear={false} minDate={dateKey(viewRange.min)} maxDate={viewRange.max?dateKey(viewRange.max):undefined} ariaLabel="Choose calendar date" className={control}/></div></div><div className="practice-calendar-room lg:hidden"><label className="block text-sm font-semibold">Room<AdminSelect className="mt-1 min-h-11 w-full rounded-xl border border-slate-300 bg-white p-3 dark:border-slate-600 dark:bg-[#1B2133]" value={room} onChange={e=>setRoom(e.target.value)}>{rooms.map(r=><option key={r}>{r}</option>)}</AdminSelect></label></div><div className="practice-calendar-toolbar flex shrink-0 items-end justify-between gap-3"><div className="min-w-0 flex-1 space-y-3"><div className="flex flex-wrap items-center gap-x-4 gap-y-2"><span className="practice-calendar-legend-title text-xs font-semibold text-slate-600 dark:text-slate-300">Legend</span><ul aria-label="Calendar legend" className="practice-calendar-legend flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600 dark:text-slate-300">{[{label:"Available",colour:"border-slate-300 bg-white dark:border-slate-500 dark:bg-[#1B2133]"},{label:"Booked",colour:"border-slate-500 bg-slate-200 dark:border-[#8190AC] dark:bg-[#3B465E]"},{label:"Your booking",colour:"border-violet-500 bg-violet-200 dark:border-violet-400 dark:bg-[#4A326E]"},{label:"Past",colour:"practice-calendar-past border-slate-400 bg-slate-50 dark:border-slate-500 dark:bg-[#171D2D]"}].filter(entry=>!ftsRecords||entry.label!=="Your booking").map(entry=><li key={entry.label} className="inline-flex items-center gap-2 whitespace-nowrap"><span aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 rounded-full border ${entry.colour}`}/><span>{entry.label}</span></li>)}</ul></div><>{ftsRecords?(()=>{const start=new Date(date);start.setHours(0,0,0,0);const end=new Date(start);end.setDate(end.getDate()+1);const dayRecords=ftsRecords.filter(r=>!r.cancelled&&Date.parse(r.start)<end.getTime()&&Date.parse(r.end)>start.getTime());const label=date.toLocaleDateString("en-GB",{day:"numeric",month:"short"});const roomRecords=dayRecords.filter(r=>r.room===room);const message=(records:Reservation[],selectedRoom=false)=>!records.length?`No reservations${selectedRoom?` for ${room}`:""} on ${label}.`:searchQuery.trim()?`${records.filter(r=>reservationMatches?.(r)).length} matching ${records.filter(r=>reservationMatches?.(r)).length===1?"reservation":"reservations"} · Matches highlighted; all bookings shown`:"Tap a booking for details.";return <p role="status" className="text-sm text-slate-600 dark:text-slate-300"><span className="lg:hidden">{message(roomRecords,true)}</span><span className="hidden lg:inline">{message(dayRecords)}</span></p>;})():null}</></div><button ref={expandButton} type="button" onClick={()=>toggleExpanded(!expanded)} aria-label={expanded?"Exit full screen calendar":"Expand calendar to full screen"} aria-expanded={expanded} title={expanded?"Exit full screen (Esc)":"Full screen"} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700 hover:bg-violet-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200 dark:hover:bg-[#211A38] sm:h-9 sm:w-9">{expanded?<Minimize2 size={16} aria-hidden="true"/>:<Maximize2 size={16} aria-hidden="true"/>}</button></div></div>{expanded&&<><button ref={exitButton} type="button" onClick={()=>toggleExpanded(false)} aria-label="Exit full screen calendar" title="Exit full screen (Esc)" className="absolute right-2 top-1.5 z-40 grid h-11 w-11 place-items-center rounded-xl border border-violet-200 bg-white text-violet-700 hover:bg-violet-50 focus-visible:outline-2 focus-visible:outline-violet-500 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200 sm:h-9 sm:w-9"><Minimize2 size={16} aria-hidden="true"/></button><div className="absolute left-[84px] right-16 top-1.5 z-40 lg:hidden"><AdminSelect aria-label="Calendar room" className="flex min-h-11 w-full rounded-lg border border-violet-200 bg-white px-3 text-base text-violet-700 dark:border-slate-600 dark:bg-[#1B2133] dark:text-violet-200" value={room} onChange={event=>setRoom(event.target.value)}>{rooms.map(name=><option key={name}>{name}</option>)}</AdminSelect></div></>}<div ref={scroll} style={expanded?{flex:"1 1 0%",minHeight:0,maxHeight:"none"}:timetableHeight===undefined?undefined:{height:timetableHeight,maxHeight:timetableHeight}} onScroll={e=>setScrollTop(e.currentTarget.scrollTop)} tabIndex={0} aria-label="Room availability timetable" className={`${expanded?"h-full rounded-none border-0":"max-h-[65dvh] rounded-2xl border border-slate-200 dark:border-slate-700"} overflow-auto bg-white dark:bg-[#1B2133]`}><div className={ftsRecords?"":"lg:min-w-[1200px]"}><div ref={gridHeader} className="sticky top-0 z-30 grid bg-white dark:bg-[#1B2133]" ><div className={`grid grid-cols-[76px_1fr] lg:grid-cols-[76px_repeat(7,minmax(0,1fr))] col-span-full ${expanded?"min-h-14":""}`}><div className="p-3 text-xs text-slate-500">Time</div>{columns.map(c=><div key={`${c.room}-${dateKey(c.date)}`} className={`border-b border-l border-slate-200 p-3 text-center text-xs font-semibold dark:border-slate-700 ${c.room!==room?"hidden lg:block":""} ${expanded?"max-lg:invisible":""}`}>{c.room}</div>)}</div></div><div className="grid grid-cols-[76px_1fr] lg:grid-cols-[76px_repeat(7,minmax(0,1fr))]"><div className="relative">{dateKey(date)===dateKey(new Date(now))&&<div className="pointer-events-none absolute left-1 right-1 z-10 -translate-y-full whitespace-nowrap rounded bg-violet-600 px-0.5 py-0.5 text-center text-[8px] font-semibold leading-tight text-white" style={{top:Math.floor((new Date(now).getHours()*60+new Date(now).getMinutes())/30)*ROW_HEIGHT+ROW_HEIGHT-3}}>Now · {clock(new Date(now).getHours()*60+new Date(now).getMinutes())}</div>}{Array.from({length:48},(_,i)=><div key={i} style={{height:ROW_HEIGHT}} className="border-b border-slate-100 px-2 pt-2 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">{clock(i*30)}</div>)}</div>{columns.map(c=><div key={`${c.room}-${dateKey(c.date)}`} className={c.room!==room?"hidden lg:block":""}>{renderColumn(c.room,c.date)}</div>)}</div></div></div></div>;
 }
