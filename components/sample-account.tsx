@@ -42,7 +42,7 @@ export type SampleAccountProps = {
  * render. A client-only loading shell can leave a production browser showing
  * only the lavender background when a client chunk fails before hydration.
  */
-export default function SampleAccount({ onUserChange, controls }: SampleAccountProps) {
+export function SampleAccount({ onUserChange, controls }: SampleAccountProps) {
   const [view, setView] = useState<"login" | "signup" | "forgot" | "sent">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -244,6 +244,8 @@ export default function SampleAccount({ onUserChange, controls }: SampleAccountP
     </main>
   );
 }
+
+export default SampleAccount;
 
 export function AccountControls({ user, onUserChange, onLogout }: { user: UserProfile; onUserChange: (user: UserProfile) => void; onLogout: () => void }) {
   const [open, setOpen] = useState(false);

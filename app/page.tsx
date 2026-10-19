@@ -49,7 +49,7 @@ import {
 import { addCalendarDays, getInstitutionNow, isValidCalendarDate, minutesToTime, timeToMinutes, type BookingPhase } from "@/lib/booking-engine";
 import { equipmentImageUrl } from "@/lib/equipment-images";
 import { LiveReservations, LiveSupport } from "@/components/live-workflows";
-import SampleAccount, { AccountControls } from "@/components/sample-account";
+import { AccountControls, SampleAccount } from "@/components/sample-account";
 import RoomAvailabilityCalendar from "@/components/room-availability-calendar";
 
 
