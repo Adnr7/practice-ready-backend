@@ -62,8 +62,11 @@ try {
   const seed = await request("/api/seed", "POST", undefined, undefined, { authorization: `Bearer ${secrets.SEED_TOKEN}` });
   assert.equal(seed.status, 200, "Local illustrative seed");
   const home = await request("/");
-  if (home.status !== 200) logs += `\nHome response: ${(await home.text()).slice(0, 4000)}\n`;
+  const homeHtml = await home.text();
+  if (home.status !== 200) logs += `\nHome response: ${homeHtml.slice(0, 4000)}\n`;
   assert.equal(home.status, 200, "Home SSR");
+  assert.match(homeHtml, /Welcome back/, "Home SSR must include the visible login surface");
+  assert.doesNotMatch(homeHtml, /aria-busy=\"true\"[^>]*><\/main>/, "Home SSR must not be only a client loading shell");
   const registration = await request("/api/auth/register", "POST", { email: "smoke@example.invalid", fullName: "Smoke Student", password: crypto.randomUUID() });
   assert.equal(registration.status, 201);
   const cookie = registration.headers.get("set-cookie").split(";")[0];
@@ -115,5 +118,9 @@ try {
     await Promise.race([workerClosed, sleep(5000)]);
     if (worker.exitCode === null) { worker.kill("SIGKILL"); await workerClosed; }
   }
-  await rm(temp, { recursive: true, force: true });
+  // Windows can release Miniflare's SQLite handle a few milliseconds after
+  // the Worker process emits close. Retry cleanup instead of reporting a
+  // passing behavioral smoke as a failed command because of a temp directory
+  // lock.
+  await rm(temp, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
 }

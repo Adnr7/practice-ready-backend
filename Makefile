@@ -8,7 +8,7 @@ export CLOUDFLARE_CF_FETCH_ENABLED := false
 export WRANGLER_SEND_METRICS := false
 export WRANGLER_WRITE_LOGS := false
 
-.PHONY: help runtime setup setup-offline test test-migrations smoke-built db-preflight db-migrate build dev start container-start typecheck lint
+.PHONY: help runtime setup setup-offline test test-migrations smoke-built db-preflight db-migrate build prepare-deploy remote-repair-and-verify dev start container-start typecheck lint
 help:
 	@$(NODE) -e 'console.log("make setup | setup-offline | test | test-migrations | db-preflight | db-migrate | build | start | dev | typecheck | lint\nOverrides: STATE=.wrangler/state PORT=8787")'
 
@@ -39,6 +39,12 @@ db-migrate: runtime
 
 build: runtime
 	$(NODE) scripts/run-framework.mjs build
+
+prepare-deploy: runtime build
+	$(NODE) scripts/prepare-deploy.mjs
+
+remote-repair-and-verify: runtime
+	bash scripts/remote-repair-and-verify.sh
 
 dev: runtime
 	$(NODE) scripts/run-framework.mjs dev

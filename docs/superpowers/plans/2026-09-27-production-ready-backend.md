@@ -42,7 +42,7 @@ Remove-Item -Recurse -Force .kiro
 Write `wrangler.json`:
 ```json
 {
-  "name": "practice-ready",
+  "name": "practice-ready-backend",
   "main": "dist/server/index.js",
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],

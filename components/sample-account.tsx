@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Check, Eye, EyeOff, LogOut, Music2, UserRound } from "lucide-react";
 import {
   Dialog,
@@ -252,11 +252,6 @@ export function AccountControls({ user, onUserChange, onLogout }: { user: UserPr
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const initials = user.fullName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AB";
-
-  useEffect(() => {
-    setDraftName(user.fullName);
-    setDraftPhone(user.phone ?? "");
-  }, [user.fullName, user.phone]);
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

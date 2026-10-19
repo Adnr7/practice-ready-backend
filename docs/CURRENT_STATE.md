@@ -1,6 +1,6 @@
 # Current implementation and handoff
 
-**Reviewed:** 2026-10-18. The current Asmi frontend was freshly inspected at `asmib170/practice-ready@635d534`; no remote application deployment or database migration was performed.
+**Reviewed:** 2026-10-19. The current Asmi frontend was freshly inspected at `asmib170/practice-ready@635d534`; no remote application deployment or database migration was performed in this local handoff.
 
 This records actual local code and verification, not approval of institutional data or a production-readiness certification. The [PRD](PRD.md) and the current Asmi main branch remain the requirements baseline. Asmi's current UI has seven bookable rooms and a 06:00 today/tomorrow booking release window; this backend supplies persistence without adding new student Home cards.
 
@@ -9,7 +9,7 @@ This records actual local code and verification, not approval of institutional d
 | Workflow | Current result | Main evidence |
 |---|---|---|
 | Accounts | Student-only registration, exact password handling, opaque random D1 sessions with hashed storage, expiry, logout revocation, current active-account/role checks | `tests/auth.test.mjs`, `tests/session-store.test.mjs` |
-| Asmi account UI | Asmi-style animated login, two-step signup, password visibility/reset-demo states, server-backed session login/logout, avatar menu and account profile dialog | `components/asmi-account.tsx`, `components/login-atmosphere.tsx` |
+| Asmi account UI | Asmi-style animated login, two-step signup, password visibility/reset-demo states, server-backed session login/logout, avatar menu and account profile dialog | `components/sample-account.tsx`, `components/login-atmosphere.tsx` |
 | Reservations | Authenticated create, active/upcoming/history, reschedule, cancellation, end-session, usage receipts and persistent history | `tests/booking-store.test.mjs`, `tests/reservation-lifecycle.test.mjs` |
 | Asmi availability UI | Seven-room, 48-half-hour live timetable with date navigation, mobile room selection, booked/own/past states and full-screen mode; reads `/api/rooms` and `/api/availability` without fixture fallback | `components/room-availability-calendar.tsx`, `app/page.tsx` |
 | Creation retries | Booking/report mutation and exact response snapshot commit in one D1 batch; same-key races replay once, mismatches return 409, expired keys can be reused | `tests/idempotency.test.mjs` |
@@ -41,15 +41,17 @@ Operational availability no longer substitutes fixture occupancy when either hal
 
 | Command | Result |
 |---|---|
-| `make test` | **178 passed, 0 failed**, including 12 real Wrangler migration tests |
-| `make typecheck` | Passed |
-| `make lint` | 0 errors; four pre-existing `no-img-element` warnings in `app/page.tsx` |
-| `make build` | Passed; large client-chunk warning remains |
-| `make smoke-built` | Passed against the actual built Worker with isolated D1 state; the deterministic smoke uses a legacy-window policy override while `tests/asmi-contract.test.mjs` covers the live Asmi window. |
+| `node scripts/test.mjs` | **178 passed, 0 failed**, including 12 real Wrangler migration tests |
+| `node node_modules/typescript/bin/tsc --noEmit` | Passed |
+| `node node_modules/eslint/bin/eslint.js . --ignore-pattern dist --ignore-pattern .next` | 0 errors; four pre-existing `no-img-element` warnings in `app/page.tsx` |
+| `node scripts/run-framework.mjs build` | Passed; large client-chunk warning remains |
+| `node scripts/smoke-built.mjs` | Passed against the actual built Worker with isolated D1 state; it now asserts the visible SSR login surface and also covers seed, auth/session restoration, booking replay, and persistence. |
 | `node scripts/rehearse-setup.mjs` | Clean frozen project-local install and offline rerun passed; lockfile unchanged |
+| `bash -n scripts/remote-repair-and-verify.sh` | Passed |
 | `git diff --check` | Passed |
 | Docker | Tool unavailable; Docker build/run not verified |
-| Browser interaction / remote deployment | Not executed; no Playwright/browser or staging/production certification |
+| Local Chrome production smoke | Passed: SSR HTML and hydrated DOM visibly rendered `Welcome back` and `login-email`; production Worker/browser verification still pending |
+| Remote deployment | Not executed; D1 backup/migration/deployment remains pending |
 
 The built Worker smoke now passes with a 60-second request bound. It uses disposable secrets, temporary isolated databases and no developer `.dev.vars` or live D1 data. This is local evidence only and is not remote deployment evidence.
 

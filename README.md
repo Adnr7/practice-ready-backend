@@ -255,68 +255,35 @@ This table describes the implemented backend contract. The original frontend sti
 
 The student Home UI retains only the current Asmi actions: booking, room availability, reservations, equipment, and reports/support. The backend also retains role-gated FTS/admin routes for operational support; they are not new student navigation. Student movement permission defaults to denied until staff designate an equipment/destination pair. Repair completion requires the latest passed inspection tied to that repair; it resolves the linked report atomically and never treats an ETA as an actual return.
 
-## Verification snapshot — 2026-10-18
+## Verification snapshot — 2026-10-19
 
 | Check | Result |
 |---|---|
 | Frozen dependency installation | Passed with pnpm 11.25.0 |
-| `make test` | **178 passed**, 0 failed; no cloud/network dependency after setup |
-| `make typecheck` | Passed |
-| `make build` | Passed; large client-chunk warning remains |
-| `make lint` | Passed with 4 existing `no-img-element` warnings |
-| `make smoke-built` | Passed; built Worker SSR, isolated seed, auth/session restoration, booking replay, and persistence |
+| `node scripts/test.mjs` | **178 passed**, 0 failed; no cloud/network dependency after setup |
+| `node node_modules/typescript/bin/tsc --noEmit` | Passed |
+| `node scripts/run-framework.mjs build` | Passed; large client-chunk warning remains |
+| `node node_modules/eslint/bin/eslint.js . --ignore-pattern dist --ignore-pattern .next` | Passed with 4 existing `no-img-element` warnings |
+| `node scripts/smoke-built.mjs` | Passed; built Worker SSR now includes the visible login surface, plus isolated seed, auth/session restoration, booking replay, and persistence |
 | Concurrent writes | Covered: booking claims, same-key creation, room closure versus booking, cross-room student overlap, movement revocation and repair updates |
-| Browser acceptance / Docker / remote deployment | Not verified |
+| Local Chrome production smoke / Docker / remote deployment | Local Chrome smoke passed; Docker and remote deployment not verified |
 
-Tests cover real route ownership/roles, revocable sessions, journal/image persistence, exact replay/expiry/rollback, report-to-repair/closure actions, inspection safety, and clean/populated migration paths. The built-Worker Home SSR check is currently failing while policy API reads and local seeding succeed. Resolve that preview failure before browser/staging acceptance; passing API/unit tests do not prove the application is release-ready.
+Tests cover real route ownership/roles, revocable sessions, journal/image persistence, exact replay/expiry/rollback, report-to-repair/closure actions, inspection safety, and clean/populated migration paths. The built-Worker Home SSR check now proves the visible Asmi login surface rather than only an HTTP 200 or lavender loading shell. Passing local tests do not prove remote deployment readiness.
 
 ## Deployment direction
 
 Host the application/API on Cloudflare Workers and its database on D1. GitHub Pages is appropriate for the research case study, not the operational backend.
 
-The commands below are **operator steps**, requiring Cloudflare access; no remote migrations or deployment were run during local setup verification.
+The only approved production target is **Worker `practice-ready-backend`** at **`https://practice-ready-backend.connect-fb5.workers.dev`**, using D1 binding `DB` for `practice_ready_db` (`4905d07c-5c1e-45f1-8331-ee3fa78a3164`). Do not deploy or verify another Worker URL.
 
-1. Complete local checks and a build: `make setup && make test && make typecheck && make lint && make build`. Keep staging and production databases/Worker names distinct.
-2. Authenticate the **installed** CLI (`node node_modules/wrangler/bin/wrangler.js login`), or provide `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` through your deployment environment. Create a staging database:
+The commands below are **operator steps**, requiring Cloudflare access. They export and rehearse the existing database before applying only checked-in migrations. No backup, migration, or deployment command is hidden in ordinary build/test commands.
 
-   ```bash
-   node node_modules/wrangler/bin/wrangler.js d1 create practice-ready-staging
-   cp dist/server/wrangler.json dist/server/wrangler.deploy.json
-   ```
+1. Complete local checks and a build: `make setup && make test && make typecheck && make lint && make build`.
+2. Authenticate the installed CLI if necessary: `node node_modules/wrangler/bin/wrangler.js login`. Never paste tokens into chat or commit secrets.
+3. From a clean, reviewed checkout, run `scripts/remote-repair-and-verify.sh`. It creates `.wrangler/predeploy-backup.sql`, rehearses the export in a disposable local state, checks the remote ledger, applies the checked-in `drizzle/` migrations, deploys the generated Worker entrypoint/assets, and verifies the approved URL. Those generated files are ignored and must not be committed.
+4. If the checked-in catalog is required after deployment, run the same script with `SEED_CATALOG=1` and `SEED_TOKEN` supplied only in the operator environment. Seeding is never performed with guessed credentials or by inserting booking rows directly.
 
-   In the copied JSON, set `name` to `practice-ready-staging`. Set/add its `d1_databases` entry with `binding: "DB"`, `database_name: "practice-ready-staging"`, `database_id` equal to the ID returned by `d1 create`, and `migrations_dir: "../../drizzle"`. Remove a stale `preview_database_id`. Preserve generated `main`, assets, compatibility settings, and other required bindings. Use `dist/server/wrangler.deploy.json` for **all** remaining commands; do not deploy the root's inherited database ID by accident. Recreate this deployment copy after every build, since `dist/` is generated.
-3. For an existing database, stop writers and take a full data/schema/ledger backup. Export with:
-
-   ```bash
-   node node_modules/wrangler/bin/wrangler.js d1 export DB --remote \
-     --config dist/server/wrangler.deploy.json --output .wrangler/predeploy-backup.sql
-   node node_modules/wrangler/bin/wrangler.js d1 execute DB --local \
-     --config wrangler.json --persist-to .wrangler/predeploy-audit \
-     --file .wrangler/predeploy-backup.sql
-   make db-preflight STATE=.wrangler/predeploy-audit
-   make db-migrate STATE=.wrangler/predeploy-audit
-   make db-migrate STATE=.wrangler/predeploy-audit
-   ```
-
-   Start with a **new disposable** audit state directory for each backup, not a previously migrated audit DB. Store the backup securely outside the image and verify the export includes `d1_migrations`; an absent ledger, drift, conflicts, unmapped rooms, or incompatible legacy report/history values requires an explicit owner-reviewed recovery/baseline plan. Do not bypass blockers by guessing migration entries. Validate important record counts/history on the upgraded copy; preflight is not a substitute for business-invariant review. If the old `0003` has already deleted history, recovery requires a pre-migration backup as described above. For a genuinely new empty remote database, rehearse with `make test-migrations` instead of restoring an export.
-4. Apply tracked remote migrations, then list the ledger-backed state:
-
-   ```bash
-   node node_modules/wrangler/bin/wrangler.js d1 migrations apply DB --remote --config dist/server/wrangler.deploy.json
-   node node_modules/wrangler/bin/wrangler.js d1 migrations list DB --remote --config dist/server/wrangler.deploy.json
-   ```
-
-   Direct Wrangler remote apply does not run this repository's local preflight; the restored-backup rehearsal in step 3 is required for populated databases. Keep writers stopped between the snapshot/rehearsal and remote apply so the audited data does not change.
-5. Set secrets interactively (never place actual secrets in this README or a tracked file), then publish the built Worker:
-
-   ```bash
-   node node_modules/wrangler/bin/wrangler.js secret put AUTH_SECRET --config dist/server/wrangler.deploy.json
-   node node_modules/wrangler/bin/wrangler.js secret put SEED_TOKEN --config dist/server/wrangler.deploy.json
-   node node_modules/wrangler/bin/wrangler.js secret put ADMIN_PASSWORD --config dist/server/wrangler.deploy.json
-   node node_modules/wrangler/bin/wrangler.js deploy --config dist/server/wrangler.deploy.json
-   ```
-
-   Provision real inventory/staff through controlled operator workflows. Test sign-in, room reads, a booking/readback, logout revocation, and applicable staff workflows on staging before repeating with a separate production configuration/database. `make start` is a local preview and never publishes a Worker. There are no automatic down migrations: follow the reviewed backup/restore or forward-fix plan in the [architecture](docs/ARCHITECTURE.md).
+The script recreates `dist/server/wrangler.deploy.json` after every build through `scripts/prepare-deploy.mjs`. It preserves the generated `main`, assets, compatibility settings and bindings while setting the required Worker identity and resolving D1 migrations from `../../drizzle` (the repository's `drizzle/` directory). `make start` is a local preview and never publishes a Worker. There are no automatic down migrations: follow the reviewed backup/restore or forward-fix plan in the [architecture](docs/ARCHITECTURE.md).
 
 ## Next development milestone
 

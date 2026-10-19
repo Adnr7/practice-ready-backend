@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadMigrations, openMigrationDatabase, preflightMigrations, projectRoot } from "./migration-tools.mjs";
 
 export async function runMigrations({ command = "apply", persistTo = path.join(projectRoot, ".wrangler/state"), json = false } = {}) {
@@ -28,7 +28,7 @@ export async function runMigrations({ command = "apply", persistTo = path.join(p
       // Explicitly local, noninteractive, and offline. The CLI adds the ledger
       // insertion to the same D1 transaction as each complete SQL migration.
       const result = spawnSync(process.execPath, [
-        "--import", path.join(projectRoot, "scripts/sites-env.mjs"),
+        "--import", pathToFileURL(path.join(projectRoot, "scripts/sites-env.mjs")).href,
         path.join(projectRoot, "node_modules/wrangler/bin/wrangler.js"),
         "d1", "migrations", "apply", "DB", "--local", "--config", path.join(projectRoot, "wrangler.json"),
         "--persist-to", persistTo,
