@@ -119,4 +119,5 @@ if grep -q 'aria-busy="true"[^>]*></main>' "${home_file}"; then
 fi
 curl --fail --silent --show-error "${production_url}/api/rooms" -o "${rooms_file}"
 grep -q '"rooms"' "${rooms_file}" || { echo "Production rooms response was incomplete." >&2; exit 1; }
+"${node_bin}" scripts/verify-production.mjs
 echo "Approved production SSR/API smoke checks passed for ${production_url}."

@@ -4,7 +4,7 @@
 
 Practice Ready is a student and facilities application for Music Practice Rooms (MPRs) at the True School of Music (TSM). This repository extends the original HCI prototype with a TypeScript backend on Cloudflare Workers and D1.
 
-**Current status:** the backend supports the current Asmi room, date-window, authentication, availability, booking, reservation, equipment, and reports/support contracts locally with persistent D1 storage. The full local suite passes **178 tests**. The deployed Worker/database has not been changed here; its current remote schema is known to be behind this migration sequence. See [current state](docs/CURRENT_STATE.md).
+**Current status:** the backend supports the current Asmi room, date-window, authentication, availability, booking, reservation, equipment, and reports/support contracts locally with persistent D1 storage. The full local suite passes **178 tests**. On 2026-10-19 the approved Worker was deployed after a private D1 export/rehearsal; the remote ledger reported no pending checked-in migrations. See [current state](docs/CURRENT_STATE.md).
 
 ## Start with the project documents
 
@@ -266,9 +266,11 @@ The student Home UI retains only the current Asmi actions: booking, room availab
 | `node node_modules/eslint/bin/eslint.js . --ignore-pattern dist --ignore-pattern .next` | Passed with 4 existing `no-img-element` warnings |
 | `node scripts/smoke-built.mjs` | Passed; built Worker SSR now includes the visible login surface, plus isolated seed, auth/session restoration, booking replay, and persistence |
 | Concurrent writes | Covered: booking claims, same-key creation, room closure versus booking, cross-room student overlap, movement revocation and repair updates |
-| Local Chrome production smoke / Docker / remote deployment | Local Chrome smoke passed; Docker and remote deployment not verified |
+| `node scripts/browser-smoke-production.mjs` | Passed against the approved Worker: visible login, real login, original account controls, profile dialog, logout, no console errors, and no failed same-origin requests |
+| Approved remote D1/deployment/API verification | Passed: private backup/rehearsal, no pending migrations, Worker deployment, registration/session/profile/logout, room/availability/equipment, journal/attachment, reports/support, booking/reschedule/cancellation/reservations |
+| Docker | Tool unavailable; Docker build/run not verified |
 
-Tests cover real route ownership/roles, revocable sessions, journal/image persistence, exact replay/expiry/rollback, report-to-repair/closure actions, inspection safety, and clean/populated migration paths. The built-Worker Home SSR check now proves the visible Asmi login surface rather than only an HTTP 200 or lavender loading shell. Passing local tests do not prove remote deployment readiness.
+Tests cover real route ownership/roles, revocable sessions, journal/image persistence, exact replay/expiry/rollback, report-to-repair/closure actions, inspection safety, and clean/populated migration paths. The built-Worker Home SSR check now proves the visible Asmi login surface rather than only an HTTP 200 or lavender loading shell. Live verification cancelled its disposable booking data; the repository has no account-delete workflow, so disposable verification accounts remain.
 
 ## Deployment direction
 

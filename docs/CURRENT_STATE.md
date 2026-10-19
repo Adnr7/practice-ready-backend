@@ -1,6 +1,6 @@
 # Current implementation and handoff
 
-**Reviewed:** 2026-10-19. The current Asmi frontend was freshly inspected at `asmib170/practice-ready@635d534`; no remote application deployment or database migration was performed in this local handoff.
+**Reviewed:** 2026-10-19. The current Asmi frontend was freshly inspected at `asmib170/practice-ready@635d534`; the approved Worker was deployed after the local checks and the remote migration ledger was verified without applying new SQL.
 
 This records actual local code and verification, not approval of institutional data or a production-readiness certification. The [PRD](PRD.md) and the current Asmi main branch remain the requirements baseline. Asmi's current UI has seven bookable rooms and a 06:00 today/tomorrow booking release window; this backend supplies persistence without adding new student Home cards.
 
@@ -33,7 +33,7 @@ Operational availability no longer substitutes fixture occupancy when either hal
 - `0011_asmi_overnight_bookings.sql`: Asmi student-window policy marker, explicit overnight end dates, and overlap/closure triggers that understand the next calendar date.
 - `0003_amusing_nekra.sql` is corrected for pending populated upgrades: the old parent rebuild could cascade-delete report history because PRAGMA foreign-key disabling is ineffective in a D1 migration transaction. Regression tests now preserve all rows, values, IDs, sequences and relationships, with atomic rollback on incompatible data. Already-applied migrations do not rerun; historical lost data requires a pre-migration backup.
 
-`make db-migrate` applies local tracked migrations through `0011_asmi_overnight_bookings.sql`. The remote Worker currently reports schema errors (`rooms.location_id`, `rooms.readiness_state`, and missing `booking_policies`), proving that its D1 state is behind the code/migration sequence. No remote migration was run because it was not authorized.
+`make db-migrate` applies local tracked migrations through `0011_asmi_overnight_bookings.sql`. On 2026-10-19 the approved remote D1 export was restored into a disposable local audit state and passed the checked-in migration preflight; the remote ledger reported all 12 migrations applied and no pending migrations. No migration SQL was applied remotely because none was pending.
 
 `db:generate` is deliberately blocked: snapshot metadata stops at `0003`. Use the checked-in reviewed SQL until snapshots are repaired and a no-op generation is proven. Details and exact deployment commands are in `README.md`.
 
@@ -46,12 +46,14 @@ Operational availability no longer substitutes fixture occupancy when either hal
 | `node node_modules/eslint/bin/eslint.js . --ignore-pattern dist --ignore-pattern .next` | 0 errors; four pre-existing `no-img-element` warnings in `app/page.tsx` |
 | `node scripts/run-framework.mjs build` | Passed; large client-chunk warning remains |
 | `node scripts/smoke-built.mjs` | Passed against the actual built Worker with isolated D1 state; it now asserts the visible SSR login surface and also covers seed, auth/session restoration, booking replay, and persistence. |
+| `node scripts/browser-smoke-production.mjs` | Passed against `https://practice-ready-backend.connect-fb5.workers.dev`: visible login, real login, original account controls, profile dialog, logout, no console errors, and no failed same-origin requests |
+| `node scripts/verify-production.mjs` | Passed against the approved Worker: registration, session restoration, profile update, logout/login, rooms, availability, equipment, journal, attachment, reports/support, booking, reschedule, cancellation and reservations. |
+| `bash scripts/remote-repair-and-verify.sh` | Passed private backup/rehearsal, remote ledger check, no-pending migration apply, exact Worker deployment and approved SSR/API smoke. |
 | `node scripts/rehearse-setup.mjs` | Clean frozen project-local install and offline rerun passed; lockfile unchanged |
 | `bash -n scripts/remote-repair-and-verify.sh` | Passed |
 | `git diff --check` | Passed |
 | Docker | Tool unavailable; Docker build/run not verified |
-| Local Chrome production smoke | Passed: SSR HTML and hydrated DOM visibly rendered `Welcome back` and `login-email`; production Worker/browser verification still pending |
-| Remote deployment | Not executed; D1 backup/migration/deployment remains pending |
+| Remote deployment | Passed: Worker version `79b6597a-68f0-4b62-8f32-d1c0668de1da` at the approved URL; no remote migration was pending |
 
 The built Worker smoke now passes with a 60-second request bound. It uses disposable secrets, temporary isolated databases and no developer `.dev.vars` or live D1 data. This is local evidence only and is not remote deployment evidence.
 
@@ -62,7 +64,7 @@ The built Worker smoke now passes with a 60-second request bound. It uses dispos
 3. **Configuration completeness:** contact directory currently has creation but no edit/archive UI; location/profile configuration mutation coverage and audit consistency need expansion. Do not imply every privileged mutation is audited simply because an audit table exists.
 4. **Production account operations:** login throttling, account recovery, institutional provisioning/eligibility, retention/cleanup and deployment-specific same-origin/security review remain. Revocable sessions are implemented; these are separate controls.
 5. **Institutional truth:** verify pilot inventory, room mappings, allowed destinations, support details/hours, freshness thresholds and policy with the owners. Seeded inventory and policy are illustrative defaults, not approved facts.
-6. **Release operations:** rehearse migration/restore against the actual staging backup, verify cold starts and load, and run the container on a machine with Docker. No remote writes or deployment were authorized/run here.
+6. **Release operations:** verify cold starts/load under a real workload and run the container on a machine with Docker. The approved Worker is deployed; a disposable account cleanup endpoint is not implemented, so live verification accounts remain until an owner-approved cleanup workflow exists.
 
 ## Resume here
 
