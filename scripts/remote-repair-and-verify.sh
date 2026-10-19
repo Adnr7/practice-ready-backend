@@ -14,7 +14,6 @@ production_url="https://practice-ready-backend.connect-fb5.workers.dev"
 deploy_config="dist/server/wrangler.deploy.json"
 backup_file="${BACKUP_FILE:-.wrangler/predeploy-backup.sql}"
 audit_state="${AUDIT_STATE:-.wrangler/predeploy-audit}"
-wrangler=(node node_modules/wrangler/bin/wrangler.js)
 
 usage() {
   cat <<'EOF'
@@ -45,8 +44,10 @@ if [[ "${1:-}" == "--help" ]]; then
 fi
 
 require_command git
-require_command node
 require_command curl
+node_bin="$(command -v node || command -v node.exe || true)"
+[[ -n "${node_bin}" ]] || { echo "Missing required command: node" >&2; exit 69; }
+wrangler=("${node_bin}" node_modules/wrangler/bin/wrangler.js)
 require_file "package.json"
 require_file "wrangler.json"
 require_file "drizzle/meta/_journal.json"
@@ -62,7 +63,7 @@ if [[ -n "$(git status --short)" ]]; then
   exit 2
 fi
 
-node scripts/prepare-deploy.mjs
+"${node_bin}" scripts/prepare-deploy.mjs
 require_file "${deploy_config}"
 grep -q '"name": "practice-ready-backend"' "${deploy_config}" || {
   echo "Generated deployment config has the wrong Worker name." >&2
@@ -84,7 +85,7 @@ echo "Creating private remote D1 export..."
 
 echo "Rehearsing the exported schema/data against checked-in migrations..."
 "${wrangler[@]}" d1 execute DB --local --config wrangler.json --persist-to "${audit_state}" --file "${backup_file}" >/dev/null
-node scripts/migrate.mjs preflight --persist-to "${audit_state}" --json
+"${node_bin}" scripts/migrate.mjs preflight --persist-to "${audit_state}" --json
 
 echo "Checking the remote migration ledger..."
 "${wrangler[@]}" d1 migrations list DB --remote --config "${deploy_config}"
