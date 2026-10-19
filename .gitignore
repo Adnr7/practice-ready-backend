@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+dist/
+*.tsbuildinfo
+
+# Cloudflare / Wrangler local files
+.wrangler/
+
+
+# Local working folders
+.codex/
+outputs/
+work/
+
+# Environment variables / secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.dev.vars
+.dev.vars.*
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Practice Ready local runtime files
+.sites-runtime/
+.agents/
+
+# Next.js / Vinext generated type file and build cache
+next-env.d.ts
+.vinext/

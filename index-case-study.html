@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A UX research case study about helping True School of Music students confirm that a suitable practice room, time slot and working equipment are ready before practice begins.">
+    <title>Practice Ready — UX Case Study</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+
+    <header class="site-header">
+        <a class="brand" href="#top" aria-label="Practice Ready — return to top">Practice Ready</a>
+        <nav aria-label="Case study sections">
+            <a href="#phase-1">Empathize</a>
+            <a href="#phase-2">Ideate</a>
+            <a href="#phase-3">Prioritize</a>
+        </nav>
+    </header>
+
+    <main id="main">
+        <section class="hero" id="top">
+            <div class="hero-copy">
+                <p class="eyebrow">HCI Mid-Term · Empathy to Execution</p>
+                <h1>Practice<br><em>ready.</em></h1>
+                <p class="lede">A research-led product blueprint that helps True School of Music students find and reserve a suitable practice room, then confirm that the equipment they need is in place and working before practice begins.</p>
+                <div class="hero-meta" aria-label="Project details">
+                    <span>Asmi B.</span>
+                    <span>Primary user: Elizabeth John</span>
+                    <span>TSM Music Practice Rooms</span>
+                </div>
+            </div>
+
+            <aside class="hero-insight">
+                <p class="mini-label">Project focus</p>
+                <p>TSM students lack reliable, up-to-date information about where essential practice equipment is located and whether it is working.</p>
+            </aside>
+        </section>
+
+        <section class="overview section-shell" aria-labelledby="overview-title">
+            <div class="section-intro">
+                <p class="section-number">00</p>
+                <div>
+                    <p class="eyebrow">Project overview</p>
+                    <h2 id="overview-title">Research before screens.</h2>
+                </div>
+            </div>
+
+            <div class="stat-grid">
+                <article><strong>3</strong><span>research interviews</span></article>
+                <article><strong>10</strong><span>card-sort participants</span></article>
+                <article><strong>7</strong><span>tree-test participants</span></article>
+                <article><strong>19</strong><span>final features</span></article>
+            </div>
+
+            <div class="callout dark-callout">
+                <p class="mini-label">How might we?</p>
+                <p>How might we help a frequent TSM vocalist reliably find and secure an appropriately equipped MPR for individual and group practice, particularly during high-demand periods?</p>
+            </div>
+        </section>
+
+        <section class="phase-band" id="phase-1">
+            <div>
+                <p>Phase 1</p>
+                <h2>Empathy &amp; Definition</h2>
+            </div>
+            <span>From assumptions to a validated human pain point</span>
+        </section>
+
+        <section class="section-shell split-section" aria-labelledby="assumption-title">
+            <div class="section-intro compact">
+                <p class="section-number">01</p>
+                <div>
+                    <p class="eyebrow">Initial assumption</p>
+                    <h2 id="assumption-title">We initially assumed the booking process was the main barrier.</h2>
+                </div>
+            </div>
+
+            <div class="two-column">
+                <div class="hypothesis-copy">
+                    <h3>Starting hypothesis</h3>
+                    <p>Students may struggle to find and use a suitable MPR because the existing process may not provide reliable information about room availability, room conditions and equipment.</p>
+                </div>
+
+                <ul class="check-list">
+                    <li>The former Excel sheet may not reflect actual room usage.</li>
+                    <li>A vacant MPR may not contain the equipment required for practice.</li>
+                    <li>The location and working condition of equipment may influence room choice.</li>
+                    <li>Students may need to physically check multiple rooms or contact others for information.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="section-shell" aria-labelledby="proto-title">
+            <div class="section-intro">
+                <p class="section-number">02</p>
+                <div>
+                    <p class="eyebrow">Proto-persona · before research</p>
+                    <h2 id="proto-title">The frequent MPR user.</h2>
+                </div>
+            </div>
+
+            <div class="persona-layout">
+                <div class="persona-lead">
+                    <p class="mini-label">Assumption-based profile</p>
+                    <h3>Music student</h3>
+                    <p>Practises individually and with groups, particularly around assessments and performances.</p>
+                    <blockquote>May need more than an empty room: the room must also support the planned practice.</blockquote>
+                </div>
+                <div>
+                    <h3>Assumed goals</h3>
+                    <ul>
+                        <li>Find an available MPR.</li>
+                        <li>Use equipment suited to the planned activity.</li>
+                        <li>Avoid losing limited practice time.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3>Assumed behaviours</h3>
+                    <ul>
+                        <li>Checks the booking sheet.</li>
+                        <li>Visits rooms to confirm availability.</li>
+                        <li>Contacts other students when information is unclear.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3>Assumed frustrations</h3>
+                    <ul>
+                        <li>Booking information may be inaccurate.</li>
+                        <li>An available room may still be unsuitable.</li>
+                        <li>Preferred equipment may be missing or unusable.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">This proto-persona records pre-research assumptions. It is not presented as validated user evidence.</p>
+        </section>
+
+        <section class="section-shell" aria-labelledby="research-title">
+            <div class="section-intro">
+                <p class="section-number">03</p>
+                <div>
+                    <p class="eyebrow">Primary research</p>
+                    <h2 id="research-title">Three perspectives revealed shared patterns.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">Three semi-structured interviews were conducted with frequent MPR users representing vocal, instrumental and technical perspectives.</p>
+
+            <div class="profile-grid">
+                <article>
+                    <p class="mini-label">P1 · Vocalist &amp; frequent MPR user</p>
+                    <h3>Elizabeth John</h3>
+                    <p>Third-year vocalist who frequently uses MPRs for individual vocal practice and group rehearsals.</p>
+                    <p class="tagline">Physical room checks · compromised practice</p>
+                </article>
+                <article>
+                    <p class="mini-label">P2 · Drummer, sound engineer &amp; FTS member</p>
+                    <h3>Aniket Sao</h3>
+                    <p>Drummer and sound engineer who uses MPRs individually and with bands while supporting technical operations.</p>
+                    <p class="tagline">Outdated equipment records · informal coordination</p>
+                </article>
+                <article>
+                    <p class="mini-label">P3 · Guitarist, sound engineer &amp; FTS member</p>
+                    <h3>Leo Emprayil</h3>
+                    <p>Guitarist and live/studio sound engineer who frequently uses MPRs and helps manage equipment.</p>
+                    <p class="tagline">Equipment relocation · maintenance and accountability</p>
+                </article>
+            </div>
+
+            <div class="finding-grid">
+                <div><span>01</span><p>Physical room checking is the default method.</p></div>
+                <div><span>02</span><p>Room availability does not guarantee suitability.</p></div>
+                <div><span>03</span><p>Informal coordination fills information gaps.</p></div>
+                <div><span>04</span><p>Equipment relocation lacks accessible tracking.</p></div>
+            </div>
+        </section>
+
+        <section class="section-shell" aria-labelledby="evidence-title">
+            <div class="section-intro">
+                <p class="section-number">04</p>
+                <div>
+                    <p class="eyebrow">Assumptions to evidence</p>
+                    <h2 id="evidence-title">Research widened the problem beyond booking.</h2>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Initial assumption</th><th>Result</th><th>Research evidence</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>The Excel sheet is the current booking system.</td><td>Changed</td><td>It existed previously but is no longer actively maintained.</td></tr>
+                        <tr><td>Students physically check rooms.</td><td>Strongly supported</td><td>All three interview participants described physical checks.</td></tr>
+                        <tr><td>Availability does not show suitability.</td><td>Strongly supported</td><td>Room condition and equipment determine actual usability.</td></tr>
+                        <tr><td>Equipment moves between spaces.</td><td>Strongly supported</td><td>All three participants described equipment relocation.</td></tr>
+                        <tr><td>Repair information may be unclear.</td><td>Strongly supported</td><td>Status and expected return dates are not dependable.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="callout dark-callout" style="margin-top: 30px;">
+                <p class="mini-label">Validated problem statement</p>
+                <p>TSM music students struggle to identify a suitable, properly equipped MPR because room availability, equipment location, working condition and maintenance status are not documented in one reliable and accessible place.</p>
+            </div>
+        </section>
+
+        <section class="section-shell" aria-labelledby="persona-title">
+            <div class="section-intro">
+                <p class="section-number">05</p>
+                <div>
+                    <p class="eyebrow">Research-based persona</p>
+                    <h2 id="persona-title">Elizabeth needs reliable information before practice begins.</h2>
+                </div>
+            </div>
+
+            <div class="persona-layout">
+                <div class="persona-lead">
+                    <p class="mini-label">Primary user</p>
+                    <h3>Elizabeth John</h3>
+                    <p>Third-year vocalist · frequent individual vocal practice and group rehearsals</p>
+                    <blockquote>“An empty room is not enough if the equipment I need is missing or unusable.”</blockquote>
+                </div>
+                <div>
+                    <h3>Goals</h3>
+                    <ul>
+                        <li>Find a room suitable for her planned practice.</li>
+                        <li>Know where the required equipment is located and whether it is working.</li>
+                        <li>Use limited practice time effectively.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3>Behaviours</h3>
+                    <ul>
+                        <li>Physically checks multiple rooms and their equipment.</li>
+                        <li>Relies on memory and informal coordination with other students.</li>
+                        <li>Continues practising without amplification when suitable equipment is unavailable.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3>Frustrations</h3>
+                    <ul>
+                        <li>Equipment is moved without accessible updates.</li>
+                        <li>Repair progress and return dates are unclear.</li>
+                        <li>Searching for rooms and equipment consumes practice time.</li>
+                        <li>Missing equipment forces her to compromise vocal preparation.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="section-shell" aria-labelledby="environment-title">
+            <div class="section-intro">
+                <p class="section-number">06</p>
+                <div>
+                    <p class="eyebrow">Practice environment</p>
+                    <h2 id="environment-title">Five rooms, but not five equivalent choices.</h2>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Room</th><th>Reported condition and equipment</th><th>Typical use</th></tr></thead>
+                    <tbody>
+                        <tr><td>MPR 1</td><td>Affected by mould and generally considered unusable.</td><td>Not used</td></tr>
+                        <tr><td>MPR 2</td><td>One keyboard and Hindustani music instruments, including tanpura and harmonium.</td><td>Vocal and other individual practice</td></tr>
+                        <tr><td>MPR 3</td><td>Keyboard, mixer, monitors, cables, microphone, stand, drum set, guitars and bass guitars.</td><td>Band rehearsals and equipment-dependent individual practice</td></tr>
+                        <tr><td>MPR 4</td><td>Multiple keyboards.</td><td>Primarily piano practice</td></tr>
+                        <tr><td>MPR 5</td><td>Keyboard, poorly functioning drum set, guitars and bass guitars; former mixer and monitors no longer present.</td><td>Limited individual or group practice</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section-shell" aria-labelledby="scenario-title">
+            <div class="section-intro">
+                <p class="section-number">07</p>
+                <div>
+                    <p class="eyebrow">Specific scenario</p>
+                    <h2 id="scenario-title">The missing mixer.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">Elizabeth went to MPR 3 to practice vocals with a microphone setup for live-performance preparation. The mixer normally kept there was missing. She searched MPRs 5, 4 and 2, then called Leo from the FTS team. Leo explained that one mixer had been moved to an MBA classroom and the second was under repair with no known return date. After losing approximately 10–15 minutes, Elizabeth practiced without the equipment she needed.</p>
+
+            <p class="note">The log below is reconstructed from Elizabeth’s interview account. It records observable actions and reported speech/events only.</p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Step</th><th>Observable action or reported event</th></tr></thead>
+                    <tbody>
+                        <tr><td>1</td><td>Elizabeth goes to MPR 3.</td></tr>
+                        <tr><td>2</td><td>She finds that the mixer normally kept in MPR 3 is absent.</td></tr>
+                        <tr><td>3</td><td>She checks MPR 5, then MPR 4, then MPR 2.</td></tr>
+                        <tr><td>4</td><td>After failing to locate the mixer, she takes out her phone and calls Leo, an FTS member.</td></tr>
+                        <tr><td>5</td><td>Elizabeth says, “Hey bro, would you know where the mixer from MPR 3 is? I can’t find it in any of the MPRs, and I need it for vocal practice.”</td></tr>
+                        <tr><td>6</td><td>Leo replies, “It’s been moved to Arts Block A for an MBA lecture.”</td></tr>
+                        <tr><td>7</td><td>Elizabeth says, “Oh, okay… What about the second mixer that used to be in MPR 5? Where is that?”</td></tr>
+                        <tr><td>8</td><td>Leo replies, “It’s gone for repairing.”</td></tr>
+                        <tr><td>9</td><td>Elizabeth asks, “When will that come back?”</td></tr>
+                        <tr><td>10</td><td>Leo replies, “I don’t know, but hopefully before the term ends,” and laughs.</td></tr>
+                        <tr><td>11</td><td>Elizabeth says, “Man… this is frustrating. Anyway, nothing can be done now. Thanks for letting me know. Bye.”</td></tr>
+                        <tr><td>12</td><td>She ends the call.</td></tr>
+                        <tr><td>13</td><td>She begins practicing without the microphone setup.</td></tr>
+                        <tr><td>14</td><td>Approximately 10–15 minutes have passed since she began searching for the mixer.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section-shell artifact-section" aria-labelledby="empathy-title">
+            <div class="section-intro">
+                <p class="section-number">08</p>
+                <div>
+                    <p class="eyebrow">Sensemaking</p>
+                    <h2 id="empathy-title">What Elizabeth says, thinks, does and feels.</h2>
+                </div>
+            </div>
+
+            <figure class="artifact-image">
+                <img src="assets/empathy-map.png" alt="Empathy map for Elizabeth John divided into Says, Thinks, Does and Feels. It records her searching MPRs 3, 5, 4 and 2 for a missing mixer, calling Leo for its location, learning that one mixer was moved and another is under repair, and feeling increasingly frustrated before practising without amplification.">
+                <figcaption>Empathy map based on Elizabeth’s interview account and the reconstructed observation log.</figcaption>
+            </figure>
+        </section>
+
+        <section class="section-shell artifact-section" aria-labelledby="journey-title">
+            <div class="section-intro">
+                <p class="section-number">09</p>
+                <div>
+                    <p class="eyebrow">Journey map</p>
+                    <h2 id="journey-title">Elizabeth’s journey from planned practice to forced compromise.</h2>
+                </div>
+            </div>
+
+            <figure class="artifact-image">
+                <img src="assets/user-journey-map.png" alt="Journey map of Elizabeth’s failed vocal-practice setup across six stages: Plan, Discovery, Search, Enquiry, Realization and Compromise. Her emotion moves from motivated at plus two, to confused at minus one, increasingly frustrated at minus two, briefly hopeful at minus one, then reaches its lowest point at minus three when neither mixer is available, before ending disappointed at minus two while practising without the equipment.">
+                <figcaption>Elizabeth’s emotion reaches its lowest point when she learns that neither mixer is available and that the mixer under repair has no confirmed return date.</figcaption>
+            </figure>
+        </section>
+
+        <section class="section-shell" aria-labelledby="define-title">
+            <div class="section-intro">
+                <p class="section-number">10</p>
+                <div>
+                    <p class="eyebrow">Define</p>
+                    <h2 id="define-title">The pain is uncertainty, not simply an absent mixer.</h2>
+                </div>
+            </div>
+
+            <div class="callout pain-callout">
+                <p class="mini-label">Validated pain point</p>
+                <p>Elizabeth lacks reliable, up-to-date visibility into the location and availability of essential vocal equipment before beginning practice. This uncertainty frustrates her, wastes her limited practice time and forces her to compromise her preparation for live performance.</p>
+            </div>
+
+            <div class="content-heading">
+                <p class="eyebrow">User Stories</p>
+                <h3>Desired outcomes derived from the core pain point.</h3>
+            </div>
+
+            <div class="story-stack" aria-label="User stories">
+                <article><span>01</span><p>As a vocalist preparing for live performance, I want to know whether the equipment required for my practice is available before I begin, so that I can use my limited practice time effectively.</p></article>
+                <article><span>02</span><p>As a frequent MPR user, I want to know which room can support my planned practice activity, so that I do not have to physically search several rooms.</p></article>
+                <article><span>03</span><p>As a vocalist, I want to know when essential equipment has been moved, is unavailable or is under repair, so that I can adjust my practice plan before reaching the MPR.</p></article>
+            </div>
+        </section>
+
+        <section class="phase-band" id="phase-2">
+            <div>
+                <p>Phase 2</p>
+                <h2>Ideate &amp; Evaluate</h2>
+            </div>
+            <span>From user stories to a validated Information Architecture</span>
+        </section>
+
+        <section class="section-shell" aria-labelledby="features-title">
+            <div class="section-intro">
+                <p class="section-number">11</p>
+                <div>
+                    <p class="eyebrow">Initial feature inventory</p>
+                    <h2 id="features-title">Seventeen feature cards derived from three user stories.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">The three user stories were translated into 17 feature and content cards. These cards were used in an open hierarchical card sort with ten frequent MPR users.</p>
+
+            <ol class="feature-list">
+                <li><strong>View MPR availability and daily time slots</strong><br><span>View free and occupied slots for each MPR on a selected day.</span></li>
+                <li><strong>Reserve an MPR time slot</strong><br><span>Reserve an available room for a selected date and time.</span></li>
+                <li><strong>Reschedule an MPR reservation</strong><br><span>Move an existing reservation to another available room or time slot.</span></li>
+                <li><strong>Cancel an MPR reservation</strong><br><span>Release a reserved slot so another student can use it.</span></li>
+                <li><strong>Log equipment used during an MPR session</strong><br><span>Select equipment used from the reserved MPR’s available default setup.</span></li>
+                <li><strong>View MPR setups and TSM equipment locations</strong><br><span>See each item’s default and current location across MPRs and other TSM facilities.</span></li>
+                <li><strong>View equipment working condition</strong><br><span>See whether each item is fully functional, partially functional, damaged or out of service.</span></li>
+                <li><strong>View equipment repair progress and expected return date</strong><br><span>See the maintenance stage and expected return date for equipment under repair.</span></li>
+                <li><strong>Find rooms suitable for vocal practice</strong><br><span>Identify rooms that support the equipment required for vocal practice.</span></li>
+                <li><strong>Find rooms suitable for band rehearsals</strong><br><span>Identify rooms with sufficient space and equipment for group practice.</span></li>
+                <li><strong>Find rooms suitable for individual instrument practice</strong><br><span>Identify rooms appropriate for practising a particular instrument individually.</span></li>
+                <li><strong>Report missing or damaged equipment</strong><br><span>Report equipment that cannot be located or is not functioning properly.</span></li>
+                <li><strong>Report a room condition or maintenance problem</strong><br><span>Report mould, electrical problems, damaged furniture or another room concern.</span></li>
+                <li><strong>View room conditions and usage restrictions</strong><br><span>Check whether a room is usable, restricted or unsuitable for an activity.</span></li>
+                <li><strong>View MPR booking and room/equipment usage rules</strong><br><span>Check booking limits, priorities, cancellation expectations and handling responsibilities.</span></li>
+                <li><strong>Contact the FTS team for equipment assistance</strong><br><span>Request technical help or equipment-related clarification.</span></li>
+                <li><strong>Log a temporary equipment relocation</strong><br><span>Record an item’s temporary location, expected return time or return to its default place.</span></li>
+            </ol>
+        </section>
+
+        <section class="section-shell" aria-labelledby="sort-title">
+            <div class="section-intro">
+                <p class="section-number">12</p>
+                <div>
+                    <p class="eyebrow">Open hierarchical card sort</p>
+                    <h2 id="sort-title">Ten participants revealed four recurring grouping patterns.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">Participants grouped the 17 cards, named their categories and described alternative choices, expected sequences, mandatory steps and conditional actions.</p>
+
+            <figure class="card-sort-photo">
+                <div class="card-sort-gallery">
+                    <img src="assets/card-sort-completed-arrangement.png" alt="Completed physical card sort showing 17 handwritten pink feature cards arranged across a table into participant-defined clusters for room discovery, reservations, equipment information, temporary relocation, repair, reporting and support. The complete arrangement is visible from the three room-finding cards at the top through the relocation and reporting cards along the bottom edge.">
+                    <img src="assets/card-sort-participant.png" alt="A participant leans over a table while examining and arranging 17 handwritten pink feature cards during the open hierarchical card-sorting activity.">
+                </div>
+                <figcaption>Physical card-sorting evidence showing both the sorting process and a completed participant-defined arrangement of the 17 feature cards.</figcaption>
+            </figure>
+
+            <div class="stat-grid compact-stats">
+                <article><strong>10/10</strong><span>room discovery</span></article>
+                <article><strong>10/10</strong><span>equipment information</span></article>
+                <article><strong>10/10</strong><span>reservations</span></article>
+                <article><strong>9/10</strong><span>issue reporting</span></article>
+            </div>
+
+            <div class="relationship-grid">
+                <p><code>9 OR 10 OR 11</code><span>Participants treated the three practice types as alternative choices.</span></p>
+                <p><code>7 → 8</code><span>Participants expected repair progress to follow working-condition information when an item was under repair.</span></p>
+                <p><code>2 → 3 OR 4</code><span>Participants expected rescheduling and cancellation only after an initial reservation.</span></p>
+                <p><code>2 / ACTIVE SESSION → 5</code><span>Participants associated equipment-use logging with a reservation or active session.</span></p>
+            </div>
+
+            <p class="note">These arrows represent contextual and sequential relationships described by participants; they are not top-level menu nesting. Contacting FTS varied in placement and was sometimes treated as separate support rather than issue reporting.</p>
+        </section>
+
+        <section class="section-shell artifact-section" aria-labelledby="v1-title">
+            <div class="section-intro">
+                <p class="section-number">13</p>
+                <div>
+                    <p class="eyebrow">Information Architecture</p>
+                    <h2 id="v1-title">V1 Information Architecture derived from the card sort.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">The repeated card-sort patterns were translated into four top-level branches: Find a Room, Equipment, Reservations, and Reports &amp; Support. Each of the 17 tested cards was placed once in the hierarchy, while sequential relationships were documented separately rather than represented as menu nesting.</p>
+
+            <figure class="artifact-image">
+                <img src="assets/v1-ia-tree.png" alt="V1 menu hierarchy for the MPR Practice System. Four top-level categories—Find a Room, Equipment, Reservations, and Reports and Support—organize the 17 card-sorted features. Practice Type sits under Find a Room, while Reschedule and Cancel sit inside My Reservations under Reservations.">
+                <figcaption>V1 IA menu tree derived from the ten-participant card sort.</figcaption>
+            </figure>
+        </section>
+
+        <section class="section-shell" aria-labelledby="tree-title">
+            <div class="section-intro">
+                <p class="section-number">14</p>
+                <div>
+                    <p class="eyebrow">Tree testing</p>
+                    <h2 id="tree-title">Tree testing revealed two problems in V1.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">The V1 IA was first tested with two participants using five task scenarios. After revising the hierarchy and clarifying an ambiguous task, the V2 IA was tested with five additional participants using seven scenarios.</p>
+
+            <div class="test-timeline">
+                <article>
+                    <p class="mini-label">V1 pilot · 2 participants</p>
+                    <h3>Two navigation problems surfaced.</h3>
+                    <ul>
+                        <li>Both participants hesitated when locating the option to reschedule an existing reservation.</li>
+                        <li>Both initially entered Reports &amp; Support when asked to locate a “missing” mixer.</li>
+                        <li>The behaviour showed that reservation management needed greater visibility and that “missing” made the location task ambiguous.</li>
+                    </ul>
+                </article>
+                <article>
+                    <p class="mini-label">V2 revisions</p>
+                    <h3>The structure and test wording were revised.</h3>
+                    <ul>
+                        <li>My Reservations became a separate top-level branch.</li>
+                        <li>Feature 18, Edit equipment-use and relocation records, was added under Active.</li>
+                        <li>Feature 19, View completed reservations and session records, was added under History.</li>
+                        <li>The mixer task was rewritten to specify temporary relocation.</li>
+                    </ul>
+                </article>
+                <article>
+                    <p class="mini-label">V2 validation · 5 participants</p>
+                    <h3>35/35 direct task successes.</h3>
+                    <ul>
+                        <li>Each participant completed all seven tasks correctly.</li>
+                        <li>No hesitation, backtracking or incorrect first selection was observed.</li>
+                        <li>All participants correctly located the temporarily relocated mixer.</li>
+                        <li>V2 was retained as the final IA.</li>
+                    </ul>
+                </article>
+            </div>
+
+            <div class="table-wrap" style="margin-top: 34px;">
+                <table>
+                    <thead><tr><th>V2 validation task</th><th>Expected path</th></tr></thead>
+                    <tbody>
+                        <tr><td>Check which MPRs are free tomorrow from 6:00–7:00 PM.</td><td>Book a Room → Availability &amp; Daily Slots</td></tr>
+                        <tr><td>Find a room suitable for a band rehearsal.</td><td>Find a Room → Practice Type → Band Rehearsal</td></tr>
+                        <tr><td>Check the current location of a temporarily relocated mixer.</td><td>Equipment → MPR Setups &amp; TSM Equipment Locations</td></tr>
+                        <tr><td>Reschedule an existing reservation.</td><td>My Reservations → Upcoming → Reschedule</td></tr>
+                        <tr><td>Report a damaged microphone.</td><td>Reports &amp; Support → Missing or Damaged Equipment</td></tr>
+                        <tr><td>Edit equipment records for an active session.</td><td>My Reservations → Active → Edit Equipment Records</td></tr>
+                        <tr><td>Review equipment records from a completed session.</td><td>My Reservations → History → Completed Reservations &amp; Session Records</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="callout dark-callout" style="margin-top: 30px;">
+                <p class="mini-label">Final feature inventory</p>
+                <p>The two evidence-based additions expanded the inventory from 17 tested card-sort items to 19 final features.</p>
+            </div>
+        </section>
+
+        <section class="section-shell artifact-section" aria-labelledby="v2-title">
+            <div class="section-intro">
+                <p class="section-number">15</p>
+                <div>
+                    <p class="eyebrow">Final structure</p>
+                    <h2 id="v2-title">Final V2 Information Architecture refined after validation.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">V2 contains five top-level branches and 19 features. The revised hierarchy achieved 35 direct successes across 35 task attempts during the five-participant validation round. Following instructor feedback, the validated “Reservations” label was refined to “Book a Room” to distinguish creating a booking from managing one under “My Reservations”; the hierarchy itself was unchanged.</p>
+
+            <figure class="artifact-image">
+                <img src="assets/final-v2-ia-tree-book-a-room.png" alt="Final V2 menu hierarchy with five top-level categories: Find a Room, Equipment, Book a Room, My Reservations, and Reports and Support. Book a Room contains availability, reservation, session equipment logging and usage rules. My Reservations is divided into Upcoming for reschedule and cancel, Active for editing equipment-use and relocation records, and History for completed reservations and session records.">
+                <figcaption>Final V2 IA after the two-participant pilot, validation with five additional participants, and a post-presentation label refinement from “Reservations” to “Book a Room.”</figcaption>
+            </figure>
+        </section>
+
+        <section class="phase-band" id="phase-3">
+            <div>
+                <p>Phase 3</p>
+                <h2>MVP Prioritization</h2>
+            </div>
+            <span>Protecting minimum value through MoSCoW and DFV</span>
+        </section>
+
+        <section class="section-shell" aria-labelledby="moscow-title">
+            <div class="section-intro">
+                <p class="section-number">16</p>
+                <div>
+                    <p class="eyebrow">MoSCoW</p>
+                    <h2 id="moscow-title">Only four features make the MVP.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">All 19 features were categorized according to their importance to the validated pain point, their dependencies and the limits of the first release. Only four features were permitted in the Minimum Viable Product.</p>
+
+            <div class="moscow-board">
+                <article class="must">
+                    <h3>Must-Have <span>4</span></h3>
+                    <ul>
+                        <li><strong>1.</strong> View MPR availability and daily time slots</li>
+                        <li><strong>2.</strong> Reserve an MPR time slot</li>
+                        <li><strong>6.</strong> View MPR setups and TSM equipment locations</li>
+                        <li><strong>7.</strong> View equipment working condition</li>
+                    </ul>
+                </article>
+                <article class="should">
+                    <h3>Should-Have <span>9</span></h3>
+                    <ul>
+                        <li><strong>17.</strong> Log a temporary equipment relocation</li>
+                        <li><strong>8.</strong> View equipment repair progress and expected return date</li>
+                        <li><strong>9.</strong> Find rooms suitable for vocal practice</li>
+                        <li><strong>14.</strong> View room conditions and usage restrictions</li>
+                        <li><strong>3.</strong> Reschedule an MPR reservation</li>
+                        <li><strong>4.</strong> Cancel an MPR reservation</li>
+                        <li><strong>10.</strong> Find rooms suitable for band rehearsals</li>
+                        <li><strong>11.</strong> Find rooms suitable for individual instrument practice</li>
+                        <li><strong>15.</strong> View MPR booking and room/equipment usage rules</li>
+                    </ul>
+                </article>
+                <article class="could">
+                    <h3>Could-Have <span>4</span></h3>
+                    <ul>
+                        <li><strong>5.</strong> Log equipment used during an MPR session</li>
+                        <li><strong>12.</strong> Report missing or damaged equipment</li>
+                        <li><strong>13.</strong> Report a room condition or maintenance problem</li>
+                        <li><strong>16.</strong> Contact the FTS team for equipment assistance</li>
+                    </ul>
+                </article>
+                <article class="wont">
+                    <h3>Won’t-Have in this MVP <span>2</span></h3>
+                    <ul>
+                        <li><strong>18.</strong> Edit equipment-use and relocation records</li>
+                        <li><strong>19.</strong> View completed reservations and session records</li>
+                    </ul>
+                </article>
+            </div>
+
+            <p class="note">Items are ordered from highest to lowest relative importance within each MoSCoW category. Feature 17 appears first among the Should-Haves because it narrowly lost the fourth and final Must-Have position to Feature 7 in the DFV comparison below.</p>
+        </section>
+
+        <section class="section-shell" aria-labelledby="dfv-title">
+            <div class="section-intro">
+                <p class="section-number">17</p>
+                <div>
+                    <p class="eyebrow">DFV matrix</p>
+                    <h2 id="dfv-title">DFV resolved the fourth Must-Have.</h2>
+                </div>
+            </div>
+
+            <p class="wide-lede">Features 7 and 17 were equally desirable because both directly responded to the missing-mixer scenario. They were scored from 1–5 across Desirability, Feasibility and Viability, with each criterion weighted equally.</p>
+            <p class="note"><strong>Scoring scale:</strong> 1 = very low, 2 = low, 3 = moderate, 4 = high, 5 = very high.</p>
+
+            <div class="table-wrap">
+                <table class="score-table">
+                    <thead><tr><th>Candidate</th><th>Desirability</th><th>Feasibility</th><th>Viability</th><th>Total</th></tr></thead>
+                    <tbody>
+                        <tr class="winner"><td>7. View equipment working condition</td><td>5</td><td>4</td><td>4</td><td><strong>13/15</strong></td></tr>
+                        <tr><td>17. Log a temporary equipment relocation</td><td>5</td><td>3</td><td>3</td><td><strong>11/15</strong></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-wrap" style="margin-top: 30px;">
+                <table>
+                    <thead><tr><th>Criterion</th><th>Feature 7: Working condition</th><th>Feature 17: Temporary relocation</th></tr></thead>
+                    <tbody>
+                        <tr><td>Desirability</td><td><strong>5</strong> — Directly helps students avoid selecting rooms containing unusable equipment.</td><td><strong>5</strong> — Directly addresses uncertainty caused when equipment is moved.</td></tr>
+                        <tr><td>Feasibility</td><td><strong>4</strong> — Requires a status field and periodic updates by authorized users, but does not depend on every student recording an action.</td><td><strong>3</strong> — Requires labelled equipment and consistent logging whenever an item is moved or returned.</td></tr>
+                        <tr><td>Viability</td><td><strong>4</strong> — Supports better use of existing equipment with a manageable maintenance process.</td><td><strong>3</strong> — Accuracy depends on continued student and FTS compliance, creating greater operational effort.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="callout result-callout">
+                <p class="mini-label">DFV winner</p>
+                <p><strong>Feature 7: View equipment working condition</strong> wins the fourth Must-Have position with 13/15. Both candidates scored equally in Desirability, but Feature 7 achieved higher Feasibility because it does not depend on every equipment movement being logged, and higher Viability because it requires less ongoing coordination to remain reliable.</p>
+            </div>
+        </section>
+
+        <section class="closing">
+            <p class="eyebrow">Final MVP</p>
+            <h2>MPR availability.<br>Time-slot reservation.<br>Equipment location.<br>Equipment working condition.</h2>
+            <p>Together, these four features address Elizabeth’s need to find a suitable practice room and determine whether the required equipment can be used, without expanding the first release to all 19 features.</p>
+            <a href="#top">Back to top ↑</a>
+        </section>
+    </main>
+
+    <footer>
+        <p>Practice Ready · HCI Mid-Term Project · Asmi B.</p>
+    </footer>
+</body>
+</html>

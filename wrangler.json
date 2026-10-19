@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "practice-ready",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "practice_ready_db",
+      "database_id": "4905d07c-5c1e-45f1-8331-ee3fa78a3164",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}

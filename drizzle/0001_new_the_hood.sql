@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `idx_time_slots_unique` ON `time_slots` (`room_id`,`date`,`start_time`);
