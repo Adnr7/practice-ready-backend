@@ -84,8 +84,7 @@ echo "Creating private remote D1 export..."
 [[ -s "${backup_file}" ]] || { echo "D1 export was empty; refusing to continue." >&2; exit 2; }
 
 echo "Rehearsing the exported schema/data against checked-in migrations..."
-"${wrangler[@]}" d1 execute DB --local --config wrangler.json --persist-to "${audit_state}" --file "${backup_file}" >/dev/null
-"${node_bin}" scripts/migrate.mjs preflight --persist-to "${audit_state}" --json
+"${node_bin}" scripts/rehearse-d1-backup.mjs --backup "${backup_file}" --persist-to "${audit_state}"
 
 echo "Checking the remote migration ledger..."
 "${wrangler[@]}" d1 migrations list DB --remote --config "${deploy_config}"
