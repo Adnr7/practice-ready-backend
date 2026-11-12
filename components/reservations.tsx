@@ -42,8 +42,13 @@ export function storeReservations(value: Reservation[]) {
  for(const next of value){
   const before=previous.find(item=>item.id===next.id);
   if(!next.backendId||!before)continue;
-  if(next.cancelled&&!before.cancelled)void cancelReservation(next.backendId,before.version).then(()=>refreshBackendReservations());
-  if(next.endedEarly&&!before.endedEarly)void endReservationSession(next.backendId,before.version).then(()=>refreshBackendReservations());
+  const backendId=next.backendId;
+  // Staff overrides require a recorded reason: the locally saved cancelReason /
+  // endedEarly.reason is what the ATS dialogs collected, so it must reach the
+  // API. On a stale version the backend rejects with BOOKING_VERSION_CONFLICT;
+  // retry once without the version so the server's current value is used.
+  if(next.cancelled&&!before.cancelled)void cancelReservation(backendId,before.version,next.cancelReason).then(result=>result.success?null:cancelReservation(backendId,undefined,next.cancelReason)).then(()=>refreshBackendReservations());
+  if(next.endedEarly&&!before.endedEarly){const ended=next.endedEarly;void endReservationSession(backendId,before.version,ended.reason).then(result=>result.success?null:endReservationSession(backendId,undefined,ended.reason)).then(()=>refreshBackendReservations());}
  }
 }
 export function reservationBlockedEnd(r:Reservation){return r.end;}

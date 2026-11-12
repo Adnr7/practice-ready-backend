@@ -496,8 +496,8 @@ async function mutateReservation(
   }
 }
 
-export function cancelReservation(id: number, version?: number): Promise<ReservationMutationResult> {
-  return mutateReservation(id, "DELETE", version === undefined ? undefined : { version });
+export function cancelReservation(id: number, version?: number, reason?: string): Promise<ReservationMutationResult> {
+  return mutateReservation(id, "DELETE", version === undefined && reason === undefined ? undefined : { ...(version === undefined ? {} : { version }), ...(reason ? { reason } : {}) });
 }
 
 export function rescheduleReservation(
@@ -510,13 +510,14 @@ export function rescheduleReservation(
 export async function endReservationSession(
   id: number,
   version?: number,
+  reason?: string,
 ): Promise<ReservationMutationResult> {
   try {
     const res = await fetch(`/api/bookings/${id}/end-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify(version === undefined ? {} : { version }),
+      body: JSON.stringify(version === undefined && !reason ? {} : { ...(version === undefined ? {} : { version }), ...(reason ? { reason } : {}) }),
     });
     const data = await readJson<{ booking?: ReservationData; alreadyEnded?: boolean; error?: string }>(res);
     return res.ok && data?.booking?.id && !data.error
