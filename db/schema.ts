@@ -362,6 +362,7 @@ export const auditEvents = sqliteTable("audit_events", {
 }, (table) => [
   index("idx_audit_events_entity").on(table.entityType, table.entityId, table.createdAt),
   index("idx_audit_events_actor").on(table.actorUserId, table.createdAt),
+  index("idx_audit_events_created").on(table.createdAt, table.id),
 ]);
 
 export const idempotencyRecords = sqliteTable("idempotency_records", {

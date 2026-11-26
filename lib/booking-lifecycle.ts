@@ -369,10 +369,9 @@ export async function cancelBooking(
   const results = await db.batch([
     db.prepare(`
       UPDATE bookings
-      SET status = 'cancelled', version = version + 1, mutation_token = ?, cancelled_at = ?,
-          cancelled_by_user_id = ?, cancellation_reason = ?
+      SET version = version + 1, mutation_token = ?
       WHERE id = ? AND status = 'confirmed' AND version = ? AND mutation_token IS NULL
-    `).bind(token, now, input.actor.userId, input.reason?.trim() || null, input.bookingId, expectedVersion),
+    `).bind(token, input.bookingId, expectedVersion),
     db.prepare(`
       DELETE FROM booking_claims
       WHERE booking_id = ? AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.mutation_token = ?)
@@ -386,7 +385,9 @@ export async function cancelBooking(
       input.bookingId, input.actor.userId, current.roomId, current.date, current.startTime, current.endTime,
       input.reason?.trim() || null, now, input.bookingId, token,
     ),
-    db.prepare("UPDATE bookings SET mutation_token = NULL WHERE id = ? AND mutation_token = ?").bind(input.bookingId, token),
+    db.prepare(`UPDATE bookings
+      SET status = 'cancelled', mutation_token = NULL, cancelled_at = ?, cancelled_by_user_id = ?, cancellation_reason = ?
+      WHERE id = ? AND mutation_token = ?`).bind(now, input.actor.userId, input.reason?.trim() || null, input.bookingId, token),
     db.prepare(`
       UPDATE time_slots SET status = 'available'
       WHERE status = 'booked'
@@ -423,9 +424,9 @@ export async function endActiveSession(
   const results = await db.batch([
     db.prepare(`
       UPDATE bookings
-      SET status = 'completed', version = version + 1, mutation_token = ?, session_ended_at = ?
+      SET version = version + 1, mutation_token = ?
       WHERE id = ? AND status = 'confirmed' AND session_ended_at IS NULL AND version = ? AND mutation_token IS NULL
-    `).bind(token, now, input.bookingId, expectedVersion),
+    `).bind(token, input.bookingId, expectedVersion),
     db.prepare(`
       DELETE FROM booking_claims
       WHERE booking_id = ? AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = ? AND b.mutation_token = ?)
@@ -439,7 +440,9 @@ export async function endActiveSession(
       input.bookingId, input.actor.userId, current.roomId, current.date, current.startTime, current.endTime,
       current.endTime, input.reason?.trim() || "Student ended the active session.", now, input.bookingId, token,
     ),
-    db.prepare("UPDATE bookings SET mutation_token = NULL WHERE id = ? AND mutation_token = ?").bind(input.bookingId, token),
+    db.prepare(`UPDATE bookings
+      SET status = 'completed', session_ended_at = ?, mutation_token = NULL
+      WHERE id = ? AND mutation_token = ?`).bind(now, input.bookingId, token),
     db.prepare(`
       UPDATE time_slots SET status = 'available'
       WHERE status = 'booked'
