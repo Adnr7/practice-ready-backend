@@ -16,6 +16,7 @@ import {
   endReservationSession,
   fetchBookingHistory,
   fetchBookingJournal,
+  fetchStaffAudit,
   fetchLocations,
   fetchPracticeProfiles,
   fetchPublishedPolicy,
@@ -29,6 +30,22 @@ import {
 } from "../lib/api-client.ts";
 
 afterEach(() => mock.restoreAll());
+
+describe("Staff activity log API client", () => {
+  it("serializes bounded filters and accepts paged audit events", async () => {
+    const event = { id: 3, action: "booked", entityType: "reservation", entityId: "PR-1003", reason: null, details: "{}", createdAt: "2026-10-01T08:00:00.000Z", actorUserId: 7, actorName: "Student One", actorEmail: "student@example.com" };
+    const fetch = mock.method(globalThis, "fetch", async () => Response.json({ events: [event], total: 1, limit: 50, offset: 0 }));
+    const result = await fetchStaffAudit({ q: "Practice Room", from: "2026-10-01", to: "2026-10-02", action: "booked", limit: 50, offset: 0 });
+    assert.deepEqual(result, { success: true, data: { events: [event], total: 1, limit: 50, offset: 0 } });
+    assert.equal(fetch.mock.calls[0].arguments[0], "/api/staff/audit?q=Practice+Room&from=2026-10-01&to=2026-10-02&action=booked&limit=50&offset=0");
+    assert.equal(fetch.mock.calls[0].arguments[1].credentials, "include");
+  });
+
+  it("does not treat an incomplete paged response as a successful audit page", async () => {
+    mock.method(globalThis, "fetch", async () => Response.json({ events: [], total: "unknown" }));
+    assert.deepEqual(await fetchStaffAudit(), { success: false, error: "The server returned an incomplete response. Please retry." });
+  });
+});
 
 describe("Authentication API client", () => {
   const user = {

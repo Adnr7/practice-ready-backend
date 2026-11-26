@@ -739,6 +739,32 @@ export function fetchBookingHistory(id: number): Promise<ApiResult<BookingHistor
   return workflowRequest(`/api/bookings/${id}/history`, (data: BookingHistoryData) => [data.history, data.usage, data.movements, data.reports].every(Array.isArray));
 }
 
+export interface AuditEventData {
+  id: number;
+  action: string;
+  entityType: string;
+  entityId: string;
+  reason: string | null;
+  details: string;
+  createdAt: string;
+  actorUserId: number | null;
+  actorName: string | null;
+  actorEmail: string | null;
+}
+
+export interface AuditEventPage {
+  events: AuditEventData[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export function fetchStaffAudit(params: { q?: string; from?: string; to?: string; action?: string; limit?: number; offset?: number } = {}): Promise<ApiResult<AuditEventPage>> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== "") query.set(key, String(value));
+  return workflowRequest(`/api/staff/audit${query.size ? `?${query}` : ""}`, (data: AuditEventPage) => Array.isArray(data.events) && Number.isSafeInteger(data.total));
+}
+
 export interface AttachmentData {
   id: number;
   fileName: string;

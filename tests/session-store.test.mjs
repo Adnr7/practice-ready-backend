@@ -22,7 +22,7 @@ const migrations = [
   "0003_amusing_nekra.sql", "0004_equipment_movements.sql", "0005_reservation_lifecycle.sql",
   "0006_room_readiness.sql", "0007_frontend_workflows.sql", "0008_sessions.sql",
   "0009_operational_integrity.sql", "0010_movement_permissions.sql",
-  "0011_asmi_overnight_bookings.sql", "0012_ats_student_access.sql",
+  "0011_asmi_overnight_bookings.sql", "0012_ats_student_access.sql", "0013_durable_activity_audit.sql",
 ];
 
 // Exercise the real route handlers and the lazy Cloudflare binding lookup in a Worker.
@@ -31,12 +31,18 @@ const worker = `
   import * as register from "./app/api/auth/register/route.ts";
   import * as logout from "./app/api/auth/logout/route.ts";
   import * as me from "./app/api/auth/me/route.ts";
+  import * as staffProfile from "./app/api/ats/profile/route.ts";
+  import * as staffMembers from "./app/api/ats/members/route.ts";
+  import * as staffAudit from "./app/api/staff/audit/route.ts";
   import { getSessionFromRequest } from "./lib/auth.ts";
   const routes = {
     "/api/auth/login": { POST: login.POST },
     "/api/auth/register": { POST: register.POST },
     "/api/auth/logout": { POST: logout.POST },
     "/api/auth/me": { GET: me.GET, PATCH: me.PATCH },
+    "/api/ats/profile": { PATCH: staffProfile.PATCH },
+    "/api/ats/members": { GET: staffMembers.GET, POST: staffMembers.POST },
+    "/api/staff/audit": { GET: staffAudit.GET },
   };
   export default {
     async fetch(request) {
@@ -263,6 +269,30 @@ describe("Worker auth routes with persisted sessions", () => {
     assert.deepEqual(await (await dispatch("/api/auth/me", { cookie })).json(), { user: null });
     assert.equal((await dispatch("/api/auth/me", { method: "PATCH", cookie, body: { fullName: "Disallowed Update" } })).status, 401);
     assert.equal((await dispatch("/api/auth/login", { method: "POST", body: { email: "admin@example.com", password } })).status, 401);
+  });
+
+  it("authenticates ATS profile and member-directory requests from the server session, not local identity markers", async () => {
+    const token = await createStoredSession(db, 2);
+    const cookie = `pr_session=${token}`;
+    const member = { fullName: "Staff Member", email: "new-staff@example.edu.in", phone: "+91 98765 43210", year: "Staff / Not applicable", areas: ["Studio & MP Labs"], password: "SomeStrongPassword123!" };
+    const profile = await dispatch("/api/ats/profile", { method: "PATCH", cookie, body: { name: "Updated Staff", phone: member.phone, year: member.year, areas: member.areas } });
+    assert.equal(profile.status, 200, await profile.clone().text());
+    assert.equal((await profile.json()).member.fullName, "Updated Staff");
+    const create = await dispatch("/api/ats/members", { method: "POST", cookie, body: member });
+    assert.equal(create.status, 201, await create.clone().text());
+    assert.equal((await create.json()).member.email, member.email);
+    const directory = await dispatch("/api/ats/members", { cookie });
+    assert.equal(directory.status, 200);
+    assert.ok((await directory.json()).members.some((entry) => entry.email === member.email));
+  });
+
+  it("restricts the durable audit endpoint to staff and validates filters", async () => {
+    const studentCookie = await login();
+    assert.equal((await dispatch("/api/staff/audit", { cookie: studentCookie })).status, 403);
+    const staffCookie = `pr_session=${await createStoredSession(db, 2)}`;
+    assert.equal((await dispatch("/api/staff/audit", { cookie: staffCookie })).status, 200);
+    assert.equal((await dispatch("/api/staff/audit?from=2026-13-40", { cookie: staffCookie })).status, 400);
+    assert.equal((await dispatch("/api/staff/audit?action=not-an-action", { cookie: staffCookie })).status, 400);
   });
 
   it("logs out by revoking the cookie server-side so replay fails but another session survives", async () => {

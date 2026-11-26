@@ -2,20 +2,16 @@
 
 // API-backed ATS member directory. Member accounts are database users with
 // staff roles; the member list, profile updates and account creation go
-// through /api/ats endpoints. The built-in demo team remains available for
-// the sample sign-in shortcuts.
+// through /api/ats endpoints. Historical demo team data is retained only for
+// display in read-only preview states; it is not an authentication directory.
 
-import { fetchAtsMembers, addAtsMember as apiAddAtsMember, updateAtsProfile as apiUpdateAtsProfile, type AtsMemberData } from "@/lib/api-client";
+import { fetchAtsMembers, addAtsMember as apiAddAtsMember, updateAtsProfile as apiUpdateAtsProfile, me, type AtsMemberData } from "@/lib/api-client";
 import { students } from "@/lib/student-access";
-import { appStorage } from "@/lib/preview-storage";
+import { appStorage, isRestrictionPreview } from "@/lib/preview-storage";
 
 export type FtsMember = { name: string; email: string; phone: string; year?: string; areas?: string[] };
 
-export const ftsTeam: FtsMember[] = [
-  { name: "Vivaan Kanvinde", email: "vivaan.kanvinde@vijaybhoomi.edu.in", phone: "+91 96198 92882", year: "3rd Year" },
-  { name: "Leo Dominic Savio Emprayil", email: "emprayil@vijaybhoomi.edu.in", phone: "+91 91751 18092", year: "2nd Year" },
-  { name: "Aniket Sao", email: "aniket.sao@vijaybhoomi.edu.in", phone: "+91 91567 37924", year: "2nd Year" },
-];
+export const ftsTeam: FtsMember[] = [];
 
 export const FTS_MEMBERS_EVENT = "practice-ready-fts-members-changed";
 
@@ -115,25 +111,23 @@ export function validateFtsProfile(input: Pick<FtsMember, "name" | "phone" | "ye
 
 /** Updates the signed-in staff member's own profile through the backend. */
 export async function updateFtsProfile(input: Pick<FtsMember, "name" | "phone" | "year" | "areas">): Promise<FtsMember> {
-  const email = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("practice-ready-fts-session-v1") : null;
-  const actor = ftsMembers().find((member) => member.email === email);
-  if (!actor) throw Error("Sign in as an ATS member to update your account.");
+  if (isRestrictionPreview()) throw Error("Staff account settings are unavailable in the sample preview.");
+  const user = await me();
+  if (!user || (user.role !== "technician" && user.role !== "admin")) throw Error("Sign in as an ATS member to update your account.");
   const profile = validateFtsProfile(input);
   const result = await apiUpdateAtsProfile({ name: profile.name, phone: profile.phone, year: profile.year, areas: profile.areas });
   if (!result.success) throw Error(result.error);
-  const updated = { ...actor, ...profile };
-  appStorage().setItem(profileKey, JSON.stringify({ ...profiles(), [actor.email]: profile }));
+  await refreshFtsMembers();
   if (typeof window !== "undefined") window.dispatchEvent(new Event(FTS_MEMBERS_EVENT));
-  return updated;
+  return memberFromApi(result.data);
 }
 
 /**
- * Demo helper retained for the sample sign-in shortcuts: the demo team signs
- * in through the normal login route with the seeded shared password.
+ * Legacy local-account verifier retained for stored preview members. Real ATS
+ * sign-in is validated by the server; demo team credentials are never accepted.
  */
 export async function verifyFtsPassword(email: string, password: string): Promise<boolean> {
   email = email.trim().toLowerCase();
-  if (ftsTeam.some((m) => m.email === email)) return password === "PracticeReadyFTS123";
   const member = saved().find((m) => m.email === email);
   if (!member) return false;
   const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -147,9 +141,9 @@ export async function verifyFtsPassword(email: string, password: string): Promis
 
 /** Creates a new ATS member account through the backend (staff only). */
 export async function addFtsMember(input: FtsMember, password: string): Promise<FtsMember> {
-  const actorEmail = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("practice-ready-fts-session-v1") : null;
-  const actor = ftsMembers().find((m) => m.email === actorEmail);
-  if (!actor) throw Error("Sign in as an ATS member to add an account.");
+  if (isRestrictionPreview()) throw Error("Staff account management is unavailable in the sample preview.");
+  const actor = await me();
+  if (!actor || (actor.role !== "technician" && actor.role !== "admin")) throw Error("Sign in as an ATS member to add an account.");
   const member = {
     name: input.name.trim(),
     email: input.email.trim().toLowerCase(),

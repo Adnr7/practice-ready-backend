@@ -185,17 +185,18 @@ export async function refreshStudents(query = ""): Promise<void> {
   return studentsInFlight;
 }
 
+let currentUser: Student | null = null;
+export function setAuthenticatedStudent(user: Student | null): void {
+  currentUser = user;
+  emitAccess();
+}
+
 export function currentStudent(): Student {
   if (isRestrictionPreview()) return previewStudent;
+  if (currentUser) return currentUser;
   if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("practice-ready-sample-session-v1") === "sample") {
-    return { name: "Asmi Battoo", email: "asmi@example.com", phone: "" };
+    return { name: "Student", email: "", phone: "" };
   }
-  try {
-    const stored = JSON.parse(appStorage().getItem("practice-ready-sample-profile-v1") || "null") as Student | null;
-    if (stored && typeof stored.name === "string" && typeof stored.email === "string") {
-      return { name: stored.name, email: stored.email, phone: typeof stored.phone === "string" ? stored.phone : "" };
-    }
-  } catch { /* Storage is optional for the sample flow. */ }
   return { name: "Student", email: "", phone: "" };
 }
 

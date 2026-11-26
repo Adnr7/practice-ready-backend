@@ -1,5 +1,6 @@
 "use client";
 import {appStorage} from "@/lib/preview-storage";
+import {currentStudent} from "@/lib/student-access";
 
 import { useEffect, useRef, useState } from "react";
 import { preparePhoto, MAX_PHOTO_BYTES } from "@/lib/photo-upload";
@@ -12,7 +13,8 @@ type Entry = { note: string; photos: string[]; updatedAt: string };
 const eventName = "practice-ready-open-journal";
 function storageKey(id: string) {
  let scope = "sample";
- try { scope = JSON.parse(appStorage().getItem("practice-ready-demo-credential-v1") || "null")?.salt || scope; } catch {}
+ const email=currentStudent().email.trim().toLowerCase();
+ if(email)scope=email;
  return `practice-ready-journal-v1:${scope}:${id}`;
 }
 export function loadJournal(id: string): Entry | null {

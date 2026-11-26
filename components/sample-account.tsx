@@ -1,5 +1,5 @@
 "use client";
-import {beginRestrictionPreview,endRestrictionPreview,previewStudent,type RestrictionPreviewMode,appStorage} from "@/lib/preview-storage";
+import {beginRestrictionPreview,endRestrictionPreview,previewStudent,type RestrictionPreviewMode} from "@/lib/preview-storage";
 
 
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -9,16 +9,12 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { acceptGuidelines, login as apiLogin, logout as apiLogout, me, register as apiRegister, updateCurrentUser, type UserProfile } from "@/lib/api-client";
 
-import {migrateStudent,students,rememberStudent,emitAccess,ACCESS_EVENT} from "@/lib/student-access";
-import BookingGuidelines, { GUIDELINES_VERSION, GUIDELINES_AGREEMENT } from "@/components/booking-guidelines";
-import {ftsTeam,ftsMembers,refreshFtsMembers,verifyFtsPassword} from "@/lib/fts-members";
-const sample = { name: "Asmi Battoo", phone: "", email: "asmi@example.com" };
-const password = "PracticeReady123";
-const key = "practice-ready-sample-profile-v1";
-const credentialKey = "practice-ready-demo-credential-v1";
+import {students,ACCESS_EVENT,setAuthenticatedStudent} from "@/lib/student-access";
+import BookingGuidelines, { GUIDELINES_AGREEMENT } from "@/components/booking-guidelines";
+import {ftsTeam,ftsMembers,refreshFtsMembers} from "@/lib/fts-members";
+const sample = { name: "", phone: "", email: "" };
 const validPhone = (value: string) => /^[+\d\s()-]+$/.test(value) && value.replace(/\D/g, "").length >= 10 && value.replace(/\D/g, "").length <= 15;
-async function passwordDigest(value: string, salt: string) { const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${value}`)); return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join(""); }
-const sessionKey = "practice-ready-sample-session-v1";
+const staffSessionKey = "practice-ready-fts-session-v1";
 const field = "mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white";
 const primary = "w-full rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500";
 
@@ -26,19 +22,26 @@ type Profile = typeof sample;
 const profileFromApi = (user: UserProfile): Profile => ({ name: user.fullName, phone: user.phone ?? "", email: user.email });
 const adminFromApi = (user: UserProfile) => ({ name: user.fullName, email: user.email, phone: user.phone ?? "" });
 function cacheBackendIdentity(user: UserProfile) {
+  setAuthenticatedStudent(user.role === "student" ? { name: user.fullName, email: user.email, phone: user.phone ?? "" } : null);
   try {
-    localStorage.setItem(key, JSON.stringify(profileFromApi(user)));
-    localStorage.setItem(credentialKey, JSON.stringify({ salt: `server-user-${user.id}`, digest: "" }));
-    sessionStorage.setItem(sessionKey, "signed-in");
-  } catch { /* Browser storage is only a compatibility cache for legacy UI helpers. */ }
+    if (user.role === "technician" || user.role === "admin") sessionStorage.setItem(staffSessionKey, user.email);
+    else sessionStorage.removeItem(staffSessionKey);
+  } catch { /* Optional compatibility marker. */ }
 }
+function clearBackendIdentity() {
+  setAuthenticatedStudent(null);
+  try { sessionStorage.removeItem(staffSessionKey); } catch { /* Optional compatibility marker. */ }
+}
+function AuthenticatedAdminView({admin,onLogout,render}:{admin:typeof ftsTeam[number];onLogout:()=>void;render:(admin:typeof ftsTeam[number],logout:()=>void)=>ReactNode}){return <>{render(admin,onLogout)}</>;}
 const AccountControlsContext = createContext<ReactNode>(null);
 export function AccountControls() { return <div className="shrink-0 max-[379px]:[&_button]:h-10 max-[379px]:[&_button]:w-10">{useContext(AccountControlsContext)}</div>; }
 
 export default function SampleAccount({ children, controls, onLogout, adminView }: { children: ReactNode; controls: ReactNode; onLogout?: () => void; adminView?: (admin:typeof ftsTeam[number],logout:()=>void)=>ReactNode }) {
   const [admin,setAdmin]=useState<typeof ftsTeam[number]|null>(null);
-  useEffect(()=>{const refresh=()=>{const email=sessionStorage.getItem("practice-ready-fts-session-v1");if(!email)return;try{const member=ftsMembers().find(m=>m.email===email);if(member)setAdmin(member);}catch{}};window.addEventListener("practice-ready-fts-members-changed",refresh);window.addEventListener("storage",refresh);return()=>{window.removeEventListener("practice-ready-fts-members-changed",refresh);window.removeEventListener("storage",refresh);};},[]);
   const [enteringAdmin,setEnteringAdmin]=useState<typeof ftsTeam[number]|null>(null);
+  const [profile, setProfile] = useState<Profile>({ name: "Practice Ready", phone: "", email: "" });
+  const [draft, setDraft] = useState(sample);
+  useEffect(()=>{const refresh=()=>{const email=sessionStorage.getItem("practice-ready-fts-session-v1");if(!email)return;try{const member=ftsMembers().find(m=>m.email===email);if(member){setAdmin(member);setProfile({name:member.name,phone:member.phone,email:member.email});setDraft({name:member.name,phone:member.phone,email:member.email});}else if(!enteringAdmin)setAdmin(null);}catch{}};window.addEventListener("practice-ready-fts-members-changed",refresh);window.addEventListener("storage",refresh);return()=>{window.removeEventListener("practice-ready-fts-members-changed",refresh);window.removeEventListener("storage",refresh);};},[enteringAdmin]);
   const [ready, setReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const authenticated = signedIn || !!admin;
@@ -64,14 +67,14 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
     });
     return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); };
   }, [enteringAdmin]);
-  const [profile, setProfile] = useState<Profile>(sample);
   const [restrictionChooser,setRestrictionChooser]=useState(false);
   const [restrictionDemo,setRestrictionDemo]=useState<RestrictionPreviewMode|null>(null);
   const [previewGeneration,setPreviewGeneration]=useState(0);
   const previewProfile=useRef<Profile>(sample);
+  const previewSession=useRef(false);
   useEffect(()=>()=>endRestrictionPreview(),[]);
-  const exitRestrictionPreview=()=>{endRestrictionPreview();setRestrictionDemo(null);setProfile(previewProfile.current);setPreviewGeneration(n=>n+1);setPanel(null);window.dispatchEvent(new Event(ACCESS_EVENT));window.scrollTo(0,0);};
-  const launchRestrictionPreview=(mode:RestrictionPreviewMode)=>{previewProfile.current=profile;beginRestrictionPreview(mode);setRestrictionDemo(mode);setRestrictionChooser(false);setProfile(previewStudent);setPreviewGeneration(n=>n+1);window.scrollTo(0,0);};
+  const exitRestrictionPreview=()=>{const shouldLogout=previewSession.current;endRestrictionPreview();if(shouldLogout){previewSession.current=false;void apiLogout().then(result=>{if(result.success){clearBackendIdentity();setSignedIn(false);setAdmin(null);onLogout?.();}else setError(result.error||"Could not end the sample preview session. Retry logout.");});}previewSession.current=false;setRestrictionDemo(null);setProfile(previewProfile.current);setPreviewGeneration(n=>n+1);setPanel(null);window.dispatchEvent(new Event(ACCESS_EVENT));window.scrollTo(0,0);};
+  const launchRestrictionPreview=(mode:RestrictionPreviewMode)=>{previewProfile.current=profile;previewSession.current=signedIn||!!admin;beginRestrictionPreview(mode);setRestrictionDemo(mode);setRestrictionChooser(false);setProfile(previewStudent);setPreviewGeneration(n=>n+1);window.scrollTo(0,0);};
 
   const [view, setView] = useState<"login" | "signup" | "forgot" | "sent">("login");
   const [email, setEmail] = useState("");
@@ -79,9 +82,7 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"profile" | null>(null);
-  const [draft, setDraft] = useState(sample);
   const [registration, setRegistration] = useState({name:"",phone:"",email:"",password:"",confirm:""});
-  const [credential, setCredential] = useState<{salt:string;digest:string}|null>(null);
   const [signupStep,setSignupStep] = useState(1);
   const [guidelinesAccepted,setGuidelinesAccepted] = useState(false);
   const signupHeading = useRef<HTMLParagraphElement>(null);
@@ -99,7 +100,7 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
         setProfile(profileFromApi(user));
         setDraft(profileFromApi(user));
         if (user.role === "student") setSignedIn(true);
-        else { setAdmin(adminFromApi(user)); void refreshFtsMembers(); }
+        else { setAdmin(adminFromApi(user)); setSignedIn(false); void refreshFtsMembers(); }
       }
       setReady(true);
     });
@@ -122,10 +123,11 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
       if (result.user.role === "student") {
         setSignedIn(true);
       } else {
-        const admin = adminFromApi(result.user);
+        const staff = adminFromApi(result.user);
+        setAdmin(staff);
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-        setEnteringAdmin(admin);
+        setEnteringAdmin(staff);
       }
     } catch {setError("Could not log in. Please allow browser storage and try again.");}
     finally {setBusy(false);}
@@ -137,8 +139,7 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
     if (!validPhone(next.phone)) {setError("Enter a valid phone number with 10–15 digits.");return;}
     if(ftsMembers().some(t=>t.email===next.email)){setError("This email belongs to an authorised ATS account. Please log in.");return;}
     if (!/^[^\s@]+@vijaybhoomi\.edu\.in$/.test(next.email)) {setError("Use your Vijaybhoomi university email (@vijaybhoomi.edu.in).");return;}
-    migrateStudent();
-    if(students().some(s=>s.email===next.email)){setError("This email already has a local account. Sign in, or contact ATS if the account was deleted.");return;}
+    if(students().some(s=>s.email===next.email)){setError("This email already has an account. Sign in, or contact ATS if the account was deleted.");return;}
     if (signupStep === 1) {setSignupStep(2);return;}
     if (registration.password.length < 8) {setError("Use a password with at least 8 characters.");return;}
     if (registration.password !== registration.confirm) {setError("Passwords do not match.");return;}
@@ -152,25 +153,26 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
       const updated = await updateCurrentUser({ fullName: next.name, phone: next.phone });
       void acceptGuidelines().catch(() => {});
       const saved = updated.success && updated.user ? profileFromApi(updated.user) : profileFromApi(result.user);
-      setProfile(saved); setDraft(saved); setRegistration({name:"",phone:"",email:"",password:"",confirm:""}); setShow(false); setShowConfirm(false); setSignedIn(true); setView("login");
+      setProfile(saved); setDraft(saved); setRegistration({name:"",phone:"",email:"",password:"",confirm:""}); setShow(false); setShowConfirm(false); setSignedIn(true); setAdmin(null); setView("login");
     } catch {setError("Could not create your account. Please try again.");}
     finally {setBusy(false);}
   }
   async function logout() {
-    endRestrictionPreview();setRestrictionDemo(null);
+    const wasPreviewing=restrictionDemo;
+    endRestrictionPreview();setRestrictionDemo(null);previewSession.current=false;
     const result = await apiLogout();
-    if (!result.success) { setError(result.error ?? "Could not sign out."); return; }
-    try { sessionStorage.removeItem(sessionKey); } catch { /* Optional compatibility cache. */ }
-    setPanel(null); setSignedIn(false); setView("login"); setEmail(""); setPass(""); setError(""); onLogout?.();
+    if (!result.success) { if(wasPreviewing){beginRestrictionPreview(wasPreviewing);setRestrictionDemo(wasPreviewing);}setError(result.error ?? "Could not sign out."); return; }
+    clearBackendIdentity();
+    setPanel(null); setSignedIn(false); setAdmin(null); setEnteringAdmin(null); setView("login"); setEmail(""); setPass(""); setError(""); onLogout?.();
   }
   const initials = profile.name.trim().split(/\s+/).slice(0, 2).map(n => n[0]).join("").toUpperCase() || "AB";
-  const toolbar = <div className="flex items-center gap-2">{controls}{signedIn && <DropdownMenu modal={false}>
+  const toolbar = <div className="flex items-center gap-2">{controls}{authenticated && <DropdownMenu modal={false}>
     <DropdownMenuTrigger asChild><button type="button" aria-label={`Account menu for ${profile.name}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full border-2 border-white bg-violet-600 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:scale-105 hover:bg-violet-700 hover:shadow-md motion-reduce:transform-none outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 dark:border-slate-600">{initials}</button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl border-slate-200 bg-white p-2 text-slate-900 dark:border-slate-600 dark:bg-[#1B2133] dark:text-white">
       <DropdownMenuLabel className="px-3 py-3"><p className="truncate text-base font-semibold">{profile.name}</p><p className="truncate text-sm font-normal text-slate-500 dark:text-slate-300">{profile.email}</p></DropdownMenuLabel>
       <DropdownMenuSeparator />
-      <DropdownMenuItem className="rounded-lg border border-transparent px-3 py-3 text-sm transition-all duration-150 focus:border-violet-300 focus:bg-violet-50/70 focus:text-violet-800 data-[highlighted]:border-violet-300 data-[highlighted]:bg-violet-50/70 data-[highlighted]:text-violet-800 dark:focus:border-violet-500/70 dark:focus:bg-[#211A38] dark:focus:text-violet-100 dark:data-[highlighted]:border-violet-500/70 dark:data-[highlighted]:bg-[#211A38] dark:data-[highlighted]:text-violet-100" onSelect={() => { setDraft(profile); setSaved(false); setError(""); setPanel("profile"); }}><UserRound size={18}/>Manage account</DropdownMenuItem>
-      {profile.email===sample.email&&restrictionDemo===null&&<DropdownMenuItem className="min-h-11 gap-2 rounded-lg px-3 py-3 text-sm focus:bg-violet-50 dark:focus:bg-[#211A38]" onSelect={()=>setRestrictionChooser(true)}><Eye size={18}/>Preview restrictions</DropdownMenuItem>}
+      <DropdownMenuItem className="rounded-lg border border-transparent px-3 py-3 text-sm transition-all duration-150 focus:border-violet-300 focus:bg-violet-50/70 focus:text-violet-800 data-[highlighted]:border-violet-300 data-[highlighted]:bg-violet-50/70 data-[highlighted]:text-violet-800 dark:focus:border-violet-500/70 dark:focus:bg-[#211A38] dark:focus:text-violet-100 dark:data-[highlighted]:border-violet-500/70 dark:data-[highlighted]:bg-[#211A38] dark:data-[highlighted]:text-violet-100" onSelect={() => { setDraft(profile); setSaved(false); setError(""); setPanel("profile"); }}><UserRound size={18}/>{admin?"Manage ATS account":"Manage account"}</DropdownMenuItem>
+      {authenticated&&restrictionDemo===null&&<DropdownMenuItem className="min-h-11 gap-2 rounded-lg px-3 py-3 text-sm focus:bg-violet-50 dark:focus:bg-[#211A38]" onSelect={()=>setRestrictionChooser(true)}><Eye size={18}/>Preview restrictions</DropdownMenuItem>}
       <DropdownMenuSeparator />
       <DropdownMenuItem className="rounded-lg border border-transparent px-3 py-3 text-sm transition-all duration-150 focus:border-violet-300 focus:bg-violet-50/70 focus:text-violet-800 data-[highlighted]:border-violet-300 data-[highlighted]:bg-violet-50/70 data-[highlighted]:text-violet-800 dark:focus:border-violet-500/70 dark:focus:bg-[#211A38] dark:focus:text-violet-100 dark:data-[highlighted]:border-violet-500/70 dark:data-[highlighted]:bg-[#211A38] dark:data-[highlighted]:text-violet-100 text-red-600 dark:text-red-400" onSelect={logout}><LogOut size={18}/>Log out</DropdownMenuItem>
     </DropdownMenuContent>
@@ -180,7 +182,7 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
 
   if(enteringAdmin)return <main aria-busy="true" aria-label="Opening ATS Overview" className="h-[100dvh] overflow-hidden bg-[#f3efff] dark:bg-[#171D2D]" style={{overflowAnchor:"none"}}/>;
 
-  if(admin&&adminView)return <><span ref={pageTop} tabIndex={-1} className="block h-0 outline-none"/>{adminView(admin,logout)}</>;
+  if(admin&&adminView)return <AuthenticatedAdminView admin={admin} onLogout={logout} render={adminView}/>;
   if(!signedIn&&view==="signup"&&signupStep===3)return <main className="relative isolate min-h-[100dvh] overflow-x-clip bg-[#f3efff] text-[#151a31] dark:bg-[#171D2D] dark:text-white">
     <div className="pointer-events-none fixed inset-0 -z-10 h-[100dvh]" aria-hidden="true"><LoginAtmosphere/></div>
     <div className="absolute right-4 top-4 z-40 hidden lg:block sm:right-8 sm:top-8">{toolbar}</div>
@@ -223,10 +225,7 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
           {error && <p role="alert" className="text-sm text-red-600 dark:text-red-300">{error}</p>}
           <button className={`${primary} disabled:opacity-60`} disabled={busy} type="submit">{busy ? "Logging in…" : "Log in"}</button>
           <p className="text-sm text-slate-600 dark:text-slate-300">Don’t have an account? <button type="button" className="min-h-10 font-semibold text-violet-700 hover:underline dark:text-violet-300" onClick={()=>{setView("signup");setSignupStep(1);setError("");setShow(false);}}>Create account</button></p>
-          <div className="space-y-1">
-            <details className="text-sm leading-6 text-slate-600 dark:text-slate-300"><summary className="min-h-11 cursor-pointer py-2 font-semibold">Try the sample account</summary><div className="pb-1"><button type="button" className="min-h-10 text-violet-700 hover:underline dark:text-violet-300" onClick={() => {setEmail(sample.email);setPass(password);setError("");}}>Fill sample details</button></div></details>
-            <details className="text-sm text-slate-500 dark:text-slate-300"><summary className="min-h-11 cursor-pointer py-2 sm:min-h-9 sm:pb-1">Try ATS admin access</summary>{ftsTeam.map(t=><button key={t.email} type="button" className="block min-h-11 py-1 text-violet-700 dark:text-violet-300 sm:min-h-8 sm:py-0.5" onClick={()=>{setEmail(t.email);setPass("PracticeReadyFTS123");}}>{t.name}</button>)}</details>
-          </div>
+              <p className="text-xs text-slate-500 dark:text-slate-300">Sample login shortcuts are disabled. Use an authorized account issued by your administrator.</p>
         </form> : view === "signup" ? <form onSubmit={signup} className="space-y-3 sm:space-y-4">
           {signupStep>1&&<button type="button" className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-violet-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 dark:text-violet-300" onClick={()=>{setSignupStep(signupStep-1);setGuidelinesAccepted(false);setError("");}}><span aria-hidden="true">←</span>{signupStep===2?"Your details":"Your password"}</button>}
           <p ref={signupHeading} tabIndex={-1} className="text-sm font-semibold text-violet-700 outline-none dark:text-violet-300" aria-live="polite">Step {signupStep} of 3 · {signupStep===1?"Your details":signupStep===2?"Set your password":"Booking & equipment guidelines"}</p>
@@ -249,15 +248,15 @@ export default function SampleAccount({ children, controls, onLogout, adminView 
     <Dialog open={panel !== null} onOpenChange={open => {if (!open) {setPanel(null);setError("");}}}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto rounded-3xl bg-white text-slate-900 dark:bg-[#1B2133] dark:text-white">
         <DialogHeader><DialogTitle>Manage account</DialogTitle><DialogDescription>Update your name and phone number. Your university email identifies your account.</DialogDescription></DialogHeader>
-        {<form className="space-y-4" onSubmit={e => {e.preventDefault();const name=draft.name.trim();if (!name) {setError("Enter your full name.");return;} if (!validPhone(draft.phone.trim())) {setError("Enter a valid phone number with 10–15 digits.");return;} const next={name,phone:draft.phone.trim(),email:draft.email.trim().toLowerCase()};setProfile(next);setDraft(next);try {appStorage().setItem(key,JSON.stringify({...JSON.parse(appStorage().getItem(key)||"{}"),...next}));rememberStudent({...next});} catch {}setError("");setSaved(true);setPanel(null);}}>
+        <form className="space-y-4" onSubmit={async e => {e.preventDefault();const fullName=draft.name.trim();if (!fullName) {setError("Enter your full name.");return;} if (!validPhone(draft.phone.trim())) {setError("Enter a valid phone number.");return;}setBusy(true);setError("");const result=await updateCurrentUser({fullName,phone:draft.phone.trim()});setBusy(false);if(!result.success||!result.user){setError(result.error||"Could not save your account.");return;}cacheBackendIdentity(result.user);const next=profileFromApi(result.user);setProfile(next);setDraft(next);setSaved(true);setPanel(null);}}>
           <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
           <label htmlFor="profile-name" className="block text-sm font-semibold">Name<input id="profile-name" className={field} required maxLength={80} value={draft.name} onChange={e => {setDraft({...draft,name:e.target.value});setSaved(false);}}/></label>
           <label htmlFor="profile-phone" className="block text-sm font-semibold">Phone number<input id="profile-phone" className={field} required type="tel" autoComplete="tel" maxLength={30} placeholder="Enter your phone number" value={draft.phone} onChange={e => {setDraft({...draft,phone:e.target.value});setSaved(false);}}/></label>
           </div>
           <div className="space-y-1 text-sm"><p className="font-semibold">Email</p><p className="break-all text-slate-500 dark:text-slate-300">{profile.email}</p><p className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><LockKeyhole size={14} aria-hidden="true"/>Email can’t be changed.</p></div>
           {error && <p role="alert" className="text-sm text-red-600 dark:text-red-300">{error}</p>}{saved && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">Profile saved.</p>}
-          <button type="submit" className={primary}>Save changes</button>
-        </form>}
+          <button type="submit" disabled={busy} className={`${primary} disabled:opacity-50`}>{busy?"Saving…":"Save changes"}</button>
+        </form>
       </DialogContent>
     </Dialog>
   </AccountControlsContext.Provider>;
