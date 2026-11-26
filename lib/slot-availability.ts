@@ -10,7 +10,7 @@ export function bookingWindowMessage(_now=Date.now()){
  return "Book a session starting within the next hour, for up to 3 hours.";
 }
 export function slotWindow(date:Date,index:number){const start=new Date(date);start.setHours(0,index*30,0,0);const end=new Date(date);end.setHours(0,(index+1)*30,0,0);return {start:start.getTime(),end:end.getTime()};}
-export function slotBookable(date:Date,index:number,now=Date.now()){const slot=slotWindow(date,index);return Number.isInteger(index)&&index>=0&&index<60&&slot.end>now&&slot.start<=now+ADVANCE_BOOKING_MS;}
+export function slotBookable(date:Date,index:number,now=Date.now()){const slot=slotWindow(date,index);return Number.isInteger(index)&&index>=0&&index<60&&slot.start>=now&&slot.end>now&&slot.start<=now+ADVANCE_BOOKING_MS;}
 // Later slots may extend an eligible start; they cannot begin a new session yet.
 export function slotSelectable(date:Date,index:number,selected:number[],now=Date.now()){
  if(slotBookable(date,index,now))return true;
@@ -25,7 +25,7 @@ export function slotPhase(date:Date,index:number,now=Date.now()){const {start,en
 export function selectedBookingWindow(date:Date,indices:number[],now=Date.now()){
  if(!indices.length||indices.length>MAX_BOOKING_SLOTS||!slotBookable(date,indices[0],now)||indices.some((i,n)=>!Number.isInteger(i)||i<0||i>=60||(n>0&&i!==indices[n-1]+1)))return null;
  const first=slotWindow(date,indices[0]);
- return {start:Math.max(first.start,now),end:slotWindow(date,indices[indices.length-1]).end};
+ return {start:first.start,end:slotWindow(date,indices[indices.length-1]).end};
 }
 
 // Calendar preview only: later free slots can extend an eligible start, but

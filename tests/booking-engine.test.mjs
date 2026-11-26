@@ -12,10 +12,30 @@ import {
   isValidCalendarDate,
   DEFAULT_BOOKING_POLICY,
 } from "../lib/booking-engine.ts";
+import { selectedBookingWindow, slotBookable, slotWindow } from "../lib/slot-availability.ts";
 
 // Fixed reference point: 2026-10-01 at 00:00 institution time.
 const NOW = { date: "2026-10-01", minutes: 0 };
 const LEGACY_POLICY = { ...DEFAULT_BOOKING_POLICY, studentWindow: false };
+
+describe("Live slot booking alignment", () => {
+  const date = new Date(2026, 9, 1);
+  const slotStart = new Date(2026, 9, 1, 17, 0).getTime();
+
+  it("does not offer or select an ongoing half-hour as a new booking start", () => {
+    const now = slotStart + 22 * 60_000;
+    assert.equal(slotBookable(date, 34, now), false);
+    assert.equal(selectedBookingWindow(date, [34], now), null);
+    assert.equal(slotBookable(date, 35, now), true);
+  });
+
+  it("submits the aligned half-hour boundary for a booking selected in advance", () => {
+    const now = slotStart + 22 * 60_000;
+    const window = selectedBookingWindow(date, [35], now);
+    assert.deepEqual(window, { start: slotWindow(date, 35).start, end: slotWindow(date, 35).end });
+    assert.equal(new Date(window.start).getMinutes(), 30);
+  });
+});
 
 describe("Booking Engine & Conflict Prevention", () => {
   it("should reject impossible calendar dates", () => {
